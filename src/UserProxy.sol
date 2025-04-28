@@ -5,24 +5,24 @@ import {IERC20} from "openzeppelin/contracts/interfaces/IERC20.sol";
 import {IERC20Permit} from "openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 
 import {IUserProxy} from "./interfaces/IUserProxy.sol";
-import {ILQTYStaking} from "./interfaces/ILQTYStaking.sol";
+import {IPairSonataStaking} from "./interfaces/IPairSonataStaking.sol";
 import {PermitParams} from "./utils/Types.sol";
 
 contract UserProxy is IUserProxy {
     /// @inheritdoc IUserProxy
-    IERC20 public immutable lqty;
+    IERC20 public immutable pairSonata;
     /// @inheritdoc IUserProxy
     IERC20 public immutable lusd;
 
     /// @inheritdoc IUserProxy
-    ILQTYStaking public immutable stakingV1;
+    IPairSonataStaking public immutable stakingV1;
     /// @inheritdoc IUserProxy
     address public immutable stakingV2;
 
-    constructor(address _lqty, address _lusd, address _stakingV1) {
-        lqty = IERC20(_lqty);
+    constructor(address _pairSonata, address _lusd, address _stakingV1) {
+        pairSonata = IERC20(_pairSonata);
         lusd = IERC20(_lusd);
-        stakingV1 = ILQTYStaking(_stakingV1);
+        stakingV1 = IPairSonataStaking(_stakingV1);
         stakingV2 = msg.sender;
     }
 
@@ -32,7 +32,7 @@ contract UserProxy is IUserProxy {
     }
 
     /// @inheritdoc IUserProxy
-    function stake(uint256 _amount, address _lqtyFrom, bool _doSendRewards, address _recipient)
+    function stake(uint256 _amount, address _pairSonataFrom, bool _doSendRewards, address _recipient)
         public
         onlyStakingV2
         returns (uint256 lusdReceived, uint256 lusdSent, uint256 ethReceived, uint256 ethSent)
@@ -40,7 +40,7 @@ contract UserProxy is IUserProxy {
         uint256 initialLUSDAmount = lusd.balanceOf(address(this));
         uint256 initialETHAmount = address(this).balance;
 
-        lqty.transferFrom(_lqtyFrom, address(this), _amount);
+        pairSonata.transferFrom(_pairSonataFrom, address(this), _amount);
         stakingV1.stake(_amount);
 
         uint256 lusdAmount = lusd.balanceOf(address(this));
@@ -55,14 +55,14 @@ contract UserProxy is IUserProxy {
     /// @inheritdoc IUserProxy
     function stakeViaPermit(
         uint256 _amount,
-        address _lqtyFrom,
+        address _pairSonataFrom,
         PermitParams calldata _permitParams,
         bool _doSendRewards,
         address _recipient
     ) external onlyStakingV2 returns (uint256 lusdReceived, uint256 lusdSent, uint256 ethReceived, uint256 ethSent) {
-        require(_lqtyFrom == _permitParams.owner, "UserProxy: owner-not-sender");
+        require(_pairSonataFrom == _permitParams.owner, "UserProxy: owner-not-sender");
 
-        try IERC20Permit(address(lqty)).permit(
+        try IERC20Permit(address(pairSonata)).permit(
             _permitParams.owner,
             _permitParams.spender,
             _permitParams.value,
@@ -72,7 +72,7 @@ contract UserProxy is IUserProxy {
             _permitParams.s
         ) {} catch {}
 
-        return stake(_amount, _lqtyFrom, _doSendRewards, _recipient);
+        return stake(_amount, _pairSonataFrom, _doSendRewards, _recipient);
     }
 
     /// @inheritdoc IUserProxy
@@ -80,29 +80,29 @@ contract UserProxy is IUserProxy {
         external
         onlyStakingV2
         returns (
-            uint256 lqtyReceived,
-            uint256 lqtySent,
+            uint256 pairSonataReceived,
+            uint256 pairSonataSent,
             uint256 lusdReceived,
             uint256 lusdSent,
             uint256 ethReceived,
             uint256 ethSent
         )
     {
-        uint256 initialLQTYAmount = lqty.balanceOf(address(this));
+        uint256 initialPairSonataAmount = pairSonata.balanceOf(address(this));
         uint256 initialLUSDAmount = lusd.balanceOf(address(this));
         uint256 initialETHAmount = address(this).balance;
 
         stakingV1.unstake(_amount);
 
-        lqtySent = lqty.balanceOf(address(this));
+        pairSonataSent = pairSonata.balanceOf(address(this));
         uint256 lusdAmount = lusd.balanceOf(address(this));
         uint256 ethAmount = address(this).balance;
 
-        lqtyReceived = lqtySent - initialLQTYAmount;
+        pairSonataReceived = pairSonataSent - initialPairSonataAmount;
         lusdReceived = lusdAmount - initialLUSDAmount;
         ethReceived = ethAmount - initialETHAmount;
 
-        if (lqtySent > 0) lqty.transfer(_recipient, lqtySent);
+        if (pairSonataSent > 0) pairSonata.transfer(_recipient, pairSonataSent);
         if (_doSendRewards) (lusdSent, ethSent) = _sendRewards(_recipient, lusdAmount, ethAmount);
     }
 

@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 /// and the tail is defined as the null item's next pointer ([tail][prev][item][next][head])
 library DoubleLinkedList {
     struct Item {
-        uint256 lqty;
+        uint256 pairSonata;
         uint256 offset;
         uint256 prev;
         uint256 next;
@@ -53,10 +53,10 @@ library DoubleLinkedList {
     /// @notice Returns the value of item `id`
     /// @param list Linked list which contains the item
     /// @param id Id of the item
-    /// @return LQTY associated with the item
-    /// @return Offset associated with the item's LQTY
-    function getLQTYAndOffset(List storage list, uint256 id) internal view returns (uint256, uint256) {
-        return (list.items[id].lqty, list.items[id].offset);
+    /// @return PairSonata associated with the item
+    /// @return Offset associated with the item's PairSonata
+    function getPairSonataAndOffset(List storage list, uint256 id) internal view returns (uint256, uint256) {
+        return (list.items[id].pairSonata, list.items[id].offset);
     }
 
     /// @notice Returns the item `id`
@@ -81,10 +81,10 @@ library DoubleLinkedList {
     /// @dev This function should not be called with an `id` that is already in the list.
     /// @param list Linked list which contains the next item and into which the new item will be inserted
     /// @param id Id of the item to insert
-    /// @param lqty amount of LQTY
-    /// @param offset associated with the LQTY amount
+    /// @param pairSonata amount of PairSonata
+    /// @param offset associated with the PairSonata amount
     /// @param next Id of the item which should follow item `id`
-    function insert(List storage list, uint256 id, uint256 lqty, uint256 offset, uint256 next) internal {
+    function insert(List storage list, uint256 id, uint256 pairSonata, uint256 offset, uint256 next) internal {
         if (contains(list, id)) revert ItemInList();
         if (next != 0 && !contains(list, next)) revert ItemNotInList();
         uint256 prev = list.items[next].prev;
@@ -92,7 +92,7 @@ library DoubleLinkedList {
         list.items[next].prev = id;
         list.items[id].prev = prev;
         list.items[id].next = next;
-        list.items[id].lqty = lqty;
+        list.items[id].pairSonata = pairSonata;
         list.items[id].offset = offset;
     }
 }

@@ -69,8 +69,6 @@ contract DeploySepoliaScript is Script, MockStakingV1Deployer {
         governance = new Governance(
             address(lqty),
             address(bold),
-            address(stakingV1),
-            address(bold),
             IGovernance.Configuration({
                 registrationFee: REGISTRATION_FEE,
                 registrationThresholdFactor: REGISTRATION_THRESHOLD_FACTOR,
