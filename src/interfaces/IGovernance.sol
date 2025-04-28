@@ -14,41 +14,14 @@ interface IGovernance {
 
     /// @notice Emitted when a user deposits PairSonata
     /// @param user The account depositing PairSonata
-    /// @param rewardRecipient The account receiving the LUSD/ETH rewards earned from staking in V1, if claimed
     /// @param pairSonataAmount The amount of PairSonata being deposited
-    /// @return lusdReceived Amount of LUSD tokens received as a side-effect of staking new PairSonata
-    /// @return lusdSent Amount of LUSD tokens sent to `rewardRecipient` (may include previously received LUSD)
-    /// @return ethReceived Amount of ETH received as a side-effect of staking new PairSonata
-    /// @return ethSent Amount of ETH sent to `rewardRecipient` (may include previously received ETH)
-    event DepositPairSonata(
-        address indexed user,
-        address rewardRecipient,
-        uint256 pairSonataAmount,
-        uint256 lusdReceived,
-        uint256 lusdSent,
-        uint256 ethReceived,
-        uint256 ethSent
-    );
+    event DepositPairSonata(address indexed user, uint256 pairSonataAmount);
 
     /// @notice Emitted when a user withdraws PairSonata or claims V1 staking rewards
     /// @param user The account withdrawing PairSonata or claiming V1 staking rewards
     /// @param recipient The account receiving the PairSonata withdrawn, and if claimed, the LUSD/ETH rewards earned from staking in V1
-    /// @return pairSonataReceived Amount of PairSonata tokens actually withdrawn (may be lower than the `_pairSonataAmount` passed to `withdrawPairSonata`)
-    /// @return pairSonataSent Amount of PairSonata tokens sent to `recipient` (may include PairSonata sent to the user's proxy from sources other than V1 staking)
-    /// @return lusdReceived Amount of LUSD tokens received as a side-effect of staking new PairSonata
-    /// @return lusdSent Amount of LUSD tokens sent to `recipient` (may include previously received LUSD)
-    /// @return ethReceived Amount of ETH received as a side-effect of staking new PairSonata
-    /// @return ethSent Amount of ETH sent to `recipient` (may include previously received ETH)
-    event WithdrawPairSonata(
-        address indexed user,
-        address recipient,
-        uint256 pairSonataReceived,
-        uint256 pairSonataSent,
-        uint256 lusdReceived,
-        uint256 lusdSent,
-        uint256 ethReceived,
-        uint256 ethSent
-    );
+    /// @return pairSonataReceived Amount of PairSonata tokens withdrawn
+    event WithdrawPairSonata(address indexed user, address recipient, uint256 pairSonataReceived);
 
     event SnapshotVotes(uint256 votes, uint256 forEpoch, uint256 oneAccrued);
     event SnapshotVotesForInitiative(address indexed initiative, uint256 votes, uint256 vetos, uint256 forEpoch);
@@ -244,16 +217,9 @@ interface IGovernance {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Deposits PairSonata
-    /// @dev The caller has to approve their `UserProxy` address to spend the PairSonata tokens
+    /// @dev The caller has to approve the Governance address to spend the PairSonata tokens
     /// @param _pairSonataAmount Amount of PairSonata to deposit
     function depositPairSonata(uint256 _pairSonataAmount) external;
-
-    /// @notice Deposits PairSonata
-    /// @dev The caller has to approve their `UserProxy` address to spend the PairSonata tokens
-    /// @param _pairSonataAmount Amount of PairSonata to deposit
-    /// @param _doSendRewards If true, send rewards claimed from PairSonata staking
-    /// @param _recipient Address to which the tokens should be sent
-    function depositPairSonata(uint256 _pairSonataAmount, bool _doSendRewards, address _recipient) external;
 
     /// @notice Withdraws PairSonata and claims any accrued LUSD and ETH rewards from StakingV1
     /// @param _pairSonataAmount Amount of PairSonata to withdraw

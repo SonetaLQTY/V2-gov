@@ -117,7 +117,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         }
     }
 
-    function enableGovernance(address _lpToken) external onlyOwner {
+    function initializeInputTokenAndRenounce(address _lpToken) external onlyOwner {
         pairSonata = IERC20(_lpToken);
         _renounceOwnership();
     }
@@ -135,17 +135,13 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     }
 
     /// @inheritdoc IGovernance
-    function depositPairSonata(uint256 _pairSonataAmount) external {
-        depositPairSonata(_pairSonataAmount, false, msg.sender);
-    }
-
-    function depositPairSonata(uint256 _pairSonataAmount, bool _doSendRewards, address _recipient) public {
+    function depositPairSonata(uint256 _pairSonataAmount) public {
         _increaseUserVoteTrackers(_pairSonataAmount);
 
         pairSonata.safeTransferFrom(msg.sender, address(this), _pairSonataAmount);
         stakes[msg.sender] += _pairSonataAmount;
 
-        emit DepositPairSonata(msg.sender, _recipient, _pairSonataAmount, 0, 0, 0, 0);
+        emit DepositPairSonata(msg.sender, _pairSonataAmount);
     }
 
     /// @inheritdoc IGovernance
@@ -155,6 +151,10 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
     function withdrawPairSonata(uint256 _pairSonataAmount, address _recipient) public {
         UserState storage userState = userStates[msg.sender];
+
+        if (_recipient == address(0)) {
+            _recipient = msg.sender;
+        }
 
         // check if user has enough unallocated pairSonata
         require(_pairSonataAmount <= userState.unallocatedPairSonata, "Governance: insufficient-unallocated-pairSonata");
@@ -175,7 +175,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         stakes[msg.sender] -= _pairSonataAmount;
         pairSonata.transfer(_recipient, _pairSonataAmount);
 
-        emit WithdrawPairSonata(msg.sender, _recipient, _pairSonataAmount, 0, 0, 0, 0, 0);
+        emit WithdrawPairSonata(msg.sender, _recipient, _pairSonataAmount);
     }
 
     /*//////////////////////////////////////////////////////////////
