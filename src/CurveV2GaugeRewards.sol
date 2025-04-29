@@ -11,8 +11,8 @@ contract CurveV2GaugeRewards is BribeInitiative {
 
     event DepositIntoGauge(uint256 amount);
 
-    constructor(address _governance, address _bold, address _bribeToken, address _gauge, uint256 _duration)
-        BribeInitiative(_governance, _bold, _bribeToken)
+    constructor(address _governance, address _one, address _bribeToken, address _gauge, uint256 _duration)
+        BribeInitiative(_governance, _one, _bribeToken)
     {
         gauge = ILiquidityGauge(_gauge);
         duration = _duration;
@@ -20,10 +20,10 @@ contract CurveV2GaugeRewards is BribeInitiative {
 
     uint256 public remainder;
 
-    /// @notice Governance transfers Bold, and we deposit it into the gauge
+    /// @notice Governance transfers One, and we deposit it into the gauge
     /// @dev Doing this allows anyone to trigger the claim
-    function onClaimForInitiative(uint256, uint256 _bold) external override onlyGovernance {
-        _depositIntoGauge(_bold);
+    function onClaimForInitiative(uint256, uint256 _one) external override onlyGovernance {
+        _depositIntoGauge(_one);
     }
 
     function _depositIntoGauge(uint256 amount) internal {
@@ -37,13 +37,13 @@ contract CurveV2GaugeRewards is BribeInitiative {
 
         remainder = 0;
 
-        uint256 available = bold.balanceOf(address(this));
+        uint256 available = one.balanceOf(address(this));
         if (available < total) {
-            total = available; // Cap due to rounding error causing a bit more bold being given away
+            total = available; // Cap due to rounding error causing a bit more one being given away
         }
 
-        bold.approve(address(gauge), total);
-        gauge.deposit_reward_token(address(bold), total, duration);
+        one.approve(address(gauge), total);
+        gauge.deposit_reward_token(address(one), total, duration);
 
         emit DepositIntoGauge(total);
     }

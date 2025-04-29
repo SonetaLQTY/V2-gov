@@ -10,8 +10,8 @@ contract UserProxyFactory is IUserProxyFactory {
     /// @inheritdoc IUserProxyFactory
     address public immutable userProxyImplementation;
 
-    constructor(address _lqty, address _lusd, address _stakingV1) {
-        userProxyImplementation = address(new UserProxy(_lqty, _lusd, _stakingV1));
+    constructor(address _pairSonata, address _lusd, address _stakingV1) {
+        userProxyImplementation = address(new UserProxy(_pairSonata, _lusd, _stakingV1));
     }
 
     /// @inheritdoc IUserProxyFactory

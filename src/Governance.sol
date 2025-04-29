@@ -13,7 +13,7 @@ import {MultiDelegateCall} from "./utils/MultiDelegateCall.sol";
 import {WAD} from "./utils/Types.sol";
 import {safeCallWithMinGas} from "./utils/SafeCallMinGas.sol";
 import {Ownable} from "./utils/Ownable.sol";
-import {_lqtyToVotes} from "./utils/VotingPower.sol";
+import {_pairSonataToVotes} from "./utils/VotingPower.sol";
 
 /// @title Governance: Modular Initiative based Governance
 contract Governance is MultiDelegateCall, Ownable, IGovernance {
@@ -24,9 +24,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     /// Replace this to ensure hooks have sufficient gas
 
     /// @inheritdoc IGovernance
-    IERC20 public immutable lqty;
-    /// @inheritdoc IGovernance
-    IERC20 public immutable bold;
+    IERC20 public immutable one;
     /// @inheritdoc IGovernance
     uint256 public immutable EPOCH_START;
     /// @inheritdoc IGovernance
@@ -49,7 +47,9 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     uint256 public immutable VOTING_THRESHOLD_FACTOR;
 
     /// @inheritdoc IGovernance
-    uint256 public boldAccrued;
+    IERC20 public pairSonata;
+    /// @inheritdoc IGovernance
+    uint256 public oneAccrued;
 
     /// @inheritdoc IGovernance
     VoteSnapshot public votesSnapshot;
@@ -63,21 +63,16 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     /// @inheritdoc IGovernance
     mapping(address => InitiativeState) public initiativeStates;
     /// @inheritdoc IGovernance
-    mapping(address => mapping(address => Allocation)) public lqtyAllocatedByUserToInitiative;
+    mapping(address => mapping(address => Allocation)) public pairSonataAllocatedByUserToInitiative;
     /// @inheritdoc IGovernance
     mapping(address => uint256) public override registeredInitiatives;
 
     mapping(address => uint256) stakes;
 
-    constructor(
-        address _lqty,
-        address _bold,
-        Configuration memory _config,
-        address _owner,
-        address[] memory _initiatives
-    ) Ownable(_owner) {
-        lqty = IERC20(_lqty);
-        bold = IERC20(_bold);
+    constructor(address _one, Configuration memory _config, address _owner, address[] memory _initiatives)
+        Ownable(_owner)
+    {
+        one = IERC20(_one);
         require(_config.minClaim <= _config.minAccrual, "Gov: min-claim-gt-min-accrual");
         REGISTRATION_FEE = _config.registrationFee;
 
@@ -120,7 +115,10 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
             emit RegisterInitiative(_initiatives[i], msg.sender, 1, success ? HookStatus.Succeeded : HookStatus.Failed);
         }
+    }
 
+    function initializeInputTokenAndRenounce(address _lpToken) external onlyOwner {
+        pairSonata = IERC20(_lpToken);
         _renounceOwnership();
     }
 
@@ -128,56 +126,56 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
                                 STAKING
     //////////////////////////////////////////////////////////////*/
 
-    function _increaseUserVoteTrackers(uint256 _lqtyAmount) private {
-        require(_lqtyAmount > 0, "Governance: zero-lqty-amount");
+    function _increaseUserVoteTrackers(uint256 _pairSonataAmount) private {
+        require(_pairSonataAmount > 0, "Governance: zero-pairSonata-amount");
 
         // update the vote power trackers
-        userStates[msg.sender].unallocatedLQTY += _lqtyAmount;
-        userStates[msg.sender].unallocatedOffset += block.timestamp * _lqtyAmount;
+        userStates[msg.sender].unallocatedPairSonata += _pairSonataAmount;
+        userStates[msg.sender].unallocatedOffset += block.timestamp * _pairSonataAmount;
     }
 
     /// @inheritdoc IGovernance
-    function depositLQTY(uint256 _lqtyAmount) external {
-        depositLQTY(_lqtyAmount, false, msg.sender);
-    }
+    function depositPairSonata(uint256 _pairSonataAmount) public {
+        _increaseUserVoteTrackers(_pairSonataAmount);
 
-    function depositLQTY(uint256 _lqtyAmount, bool _doSendRewards, address _recipient) public {
-        _increaseUserVoteTrackers(_lqtyAmount);
+        pairSonata.safeTransferFrom(msg.sender, address(this), _pairSonataAmount);
+        stakes[msg.sender] += _pairSonataAmount;
 
-        lqty.safeTransferFrom(msg.sender, address(this), _lqtyAmount);
-        stakes[msg.sender] += _lqtyAmount;
-
-        emit DepositLQTY(msg.sender, _recipient, _lqtyAmount, 0, 0, 0, 0);
+        emit DepositPairSonata(msg.sender, _pairSonataAmount);
     }
 
     /// @inheritdoc IGovernance
-    function withdrawLQTY(uint256 _lqtyAmount) external {
-        withdrawLQTY(_lqtyAmount, msg.sender);
+    function withdrawPairSonata(uint256 _pairSonataAmount) external {
+        withdrawPairSonata(_pairSonataAmount, msg.sender);
     }
 
-    function withdrawLQTY(uint256 _lqtyAmount, address _recipient) public {
+    function withdrawPairSonata(uint256 _pairSonataAmount, address _recipient) public {
         UserState storage userState = userStates[msg.sender];
 
-        // check if user has enough unallocated lqty
-        require(_lqtyAmount <= userState.unallocatedLQTY, "Governance: insufficient-unallocated-lqty");
+        if (_recipient == address(0)) {
+            _recipient = msg.sender;
+        }
+
+        // check if user has enough unallocated pairSonata
+        require(_pairSonataAmount <= userState.unallocatedPairSonata, "Governance: insufficient-unallocated-pairSonata");
 
         // Update the offset tracker
-        if (_lqtyAmount < userState.unallocatedLQTY) {
-            // The offset decrease is proportional to the partial lqty decrease
-            uint256 offsetDecrease = _lqtyAmount * userState.unallocatedOffset / userState.unallocatedLQTY;
+        if (_pairSonataAmount < userState.unallocatedPairSonata) {
+            // The offset decrease is proportional to the partial pairSonata decrease
+            uint256 offsetDecrease = _pairSonataAmount * userState.unallocatedOffset / userState.unallocatedPairSonata;
             userState.unallocatedOffset -= offsetDecrease;
         } else {
-            // if _lqtyAmount == userState.unallocatedLqty, zero the offset tracker
+            // if _pairSonataAmount == userState.unallocatedPairSonata, zero the offset tracker
             userState.unallocatedOffset = 0;
         }
 
-        // Update the user's LQTY tracker
-        userState.unallocatedLQTY -= _lqtyAmount;
+        // Update the user's PairSonata tracker
+        userState.unallocatedPairSonata -= _pairSonataAmount;
 
-        stakes[msg.sender] -= _lqtyAmount;
-        lqty.transfer(_recipient, _lqtyAmount);
+        stakes[msg.sender] -= _pairSonataAmount;
+        pairSonata.transfer(_recipient, _pairSonataAmount);
 
-        emit WithdrawLQTY(msg.sender, _recipient, _lqtyAmount, 0, 0, 0, 0, 0);
+        emit WithdrawPairSonata(msg.sender, _recipient, _pairSonataAmount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -200,8 +198,12 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     }
 
     /// @inheritdoc IGovernance
-    function lqtyToVotes(uint256 _lqtyAmount, uint256 _timestamp, uint256 _offset) public pure returns (uint256) {
-        return _lqtyToVotes(_lqtyAmount, _timestamp, _offset);
+    function pairSonataToVotes(uint256 _pairSonataAmount, uint256 _timestamp, uint256 _offset)
+        public
+        pure
+        returns (uint256)
+    {
+        return _pairSonataToVotes(_pairSonataAmount, _timestamp, _offset);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -226,8 +228,8 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     function calculateVotingThreshold(uint256 _votes) public view returns (uint256) {
         if (_votes == 0) return 0;
 
-        uint256 minVotes; // to reach MIN_CLAIM: snapshotVotes * MIN_CLAIM / boldAccrued
-        uint256 payoutPerVote = boldAccrued * WAD / _votes;
+        uint256 minVotes; // to reach MIN_CLAIM: snapshotVotes * MIN_CLAIM / oneAccrued
+        uint256 payoutPerVote = oneAccrued * WAD / _votes;
         if (payoutPerVote != 0) {
             minVotes = MIN_CLAIM * WAD / payoutPerVote;
         }
@@ -242,9 +244,9 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
         if (shouldUpdate) {
             votesSnapshot = snapshot;
-            uint256 boldBalance = bold.balanceOf(address(this));
-            boldAccrued = (boldBalance < MIN_ACCRUAL) ? 0 : boldBalance;
-            emit SnapshotVotes(snapshot.votes, snapshot.forEpoch, boldAccrued);
+            uint256 oneBalance = one.balanceOf(address(this));
+            oneAccrued = (oneBalance < MIN_ACCRUAL) ? 0 : oneBalance;
+            emit SnapshotVotes(snapshot.votes, snapshot.forEpoch, oneAccrued);
         }
     }
 
@@ -261,7 +263,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         if (snapshot.forEpoch < currentEpoch - 1) {
             shouldUpdate = true;
 
-            snapshot.votes = lqtyToVotes(state.countedVoteLQTY, epochStart(), state.countedVoteOffset);
+            snapshot.votes = pairSonataToVotes(state.countedVotePairSonata, epochStart(), state.countedVoteOffset);
             snapshot.forEpoch = currentEpoch - 1;
         }
     }
@@ -301,8 +303,8 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
             shouldUpdate = true;
 
             uint256 start = epochStart();
-            uint256 votes = lqtyToVotes(initiativeState.voteLQTY, start, initiativeState.voteOffset);
-            uint256 vetos = lqtyToVotes(initiativeState.vetoLQTY, start, initiativeState.vetoOffset);
+            uint256 votes = pairSonataToVotes(initiativeState.votePairSonata, start, initiativeState.voteOffset);
+            uint256 vetos = pairSonataToVotes(initiativeState.vetoPairSonata, start, initiativeState.vetoOffset);
             initiativeSnapshot.votes = votes;
             initiativeSnapshot.vetos = vetos;
 
@@ -386,7 +388,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
             _votesForInitiativeSnapshot.votes > votingTheshold
                 && _votesForInitiativeSnapshot.votes > _votesForInitiativeSnapshot.vetos
         ) {
-            uint256 claim = _votesForInitiativeSnapshot.votes * boldAccrued / _votesSnapshot.votes;
+            uint256 claim = _votesForInitiativeSnapshot.votes * oneAccrued / _votesSnapshot.votes;
 
             return (InitiativeStatus.CLAIMABLE, lastEpochClaim, claim);
         }
@@ -420,19 +422,19 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         (VoteSnapshot memory snapshot,) = _snapshotVotes();
         UserState memory userState = userStates[msg.sender];
 
-        bold.safeTransferFrom(msg.sender, address(this), REGISTRATION_FEE);
+        one.safeTransferFrom(msg.sender, address(this), REGISTRATION_FEE);
 
-        // an initiative can be registered if the registrant has more voting power (LQTY * age)
+        // an initiative can be registered if the registrant has more voting power (PairSonata * age)
         // than the registration threshold derived from the previous epoch's total global votes
 
         uint256 upscaledSnapshotVotes = snapshot.votes;
 
         uint256 totalUserOffset = userState.allocatedOffset + userState.unallocatedOffset;
         require(
-            // Check against the user's total voting power, so include both allocated and unallocated LQTY
-            lqtyToVotes(stakes[msg.sender], epochStart(), totalUserOffset)
+            // Check against the user's total voting power, so include both allocated and unallocated PairSonata
+            pairSonataToVotes(stakes[msg.sender], epochStart(), totalUserOffset)
                 >= upscaledSnapshotVotes * REGISTRATION_THRESHOLD_FACTOR / WAD,
-            "Governance: insufficient-lqty"
+            "Governance: insufficient-pairSonata"
         );
 
         registeredInitiatives[_initiative] = currentEpoch;
@@ -452,8 +454,8 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
     struct ResetInitiativeData {
         address initiative;
-        int256 LQTYVotes;
-        int256 LQTYVetos;
+        int256 PairSonataVotes;
+        int256 PairSonataVetos;
         int256 OffsetVotes;
         int256 OffsetVetos;
     }
@@ -467,34 +469,36 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     {
         ResetInitiativeData[] memory cachedData = new ResetInitiativeData[](_initiativesToReset.length);
 
-        int256[] memory deltaLQTYVotes = new int256[](_initiativesToReset.length);
-        int256[] memory deltaLQTYVetos = new int256[](_initiativesToReset.length);
+        int256[] memory deltaPairSonataVotes = new int256[](_initiativesToReset.length);
+        int256[] memory deltaPairSonataVetos = new int256[](_initiativesToReset.length);
         int256[] memory deltaOffsetVotes = new int256[](_initiativesToReset.length);
         int256[] memory deltaOffsetVetos = new int256[](_initiativesToReset.length);
 
         // Prepare reset data
         for (uint256 i; i < _initiativesToReset.length; i++) {
-            Allocation memory alloc = lqtyAllocatedByUserToInitiative[msg.sender][_initiativesToReset[i]];
-            require(alloc.voteLQTY > 0 || alloc.vetoLQTY > 0, "Governance: nothing to reset");
+            Allocation memory alloc = pairSonataAllocatedByUserToInitiative[msg.sender][_initiativesToReset[i]];
+            require(alloc.votePairSonata > 0 || alloc.vetoPairSonata > 0, "Governance: nothing to reset");
 
             // Cache, used to enforce limits later
             cachedData[i] = ResetInitiativeData({
                 initiative: _initiativesToReset[i],
-                LQTYVotes: int256(alloc.voteLQTY),
-                LQTYVetos: int256(alloc.vetoLQTY),
+                PairSonataVotes: int256(alloc.votePairSonata),
+                PairSonataVetos: int256(alloc.vetoPairSonata),
                 OffsetVotes: int256(alloc.voteOffset),
                 OffsetVetos: int256(alloc.vetoOffset)
             });
 
             // -0 is still 0, so its fine to flip both
-            deltaLQTYVotes[i] = -(cachedData[i].LQTYVotes);
-            deltaLQTYVetos[i] = -(cachedData[i].LQTYVetos);
+            deltaPairSonataVotes[i] = -(cachedData[i].PairSonataVotes);
+            deltaPairSonataVetos[i] = -(cachedData[i].PairSonataVetos);
             deltaOffsetVotes[i] = -(cachedData[i].OffsetVotes);
             deltaOffsetVetos[i] = -(cachedData[i].OffsetVetos);
         }
 
         // RESET HERE || All initiatives will receive most updated data and 0 votes / vetos
-        _allocateLQTY(_initiativesToReset, deltaLQTYVotes, deltaLQTYVetos, deltaOffsetVotes, deltaOffsetVetos);
+        _allocatePairSonata(
+            _initiativesToReset, deltaPairSonataVotes, deltaPairSonataVetos, deltaOffsetVotes, deltaOffsetVetos
+        );
 
         return cachedData;
     }
@@ -510,19 +514,20 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         // All other calls to the system enforce this
         // So it's recommended that your last call to `resetAllocations` passes the check
         if (checkAll) {
-            require(userStates[msg.sender].allocatedLQTY == 0, "Governance: must be a reset");
+            require(userStates[msg.sender].allocatedPairSonata == 0, "Governance: must be a reset");
         }
     }
 
     /// @inheritdoc IGovernance
-    function allocateLQTY(
+    function allocatePairSonata(
         address[] calldata _initiativesToReset,
         address[] calldata _initiatives,
-        int256[] calldata _absoluteLQTYVotes,
-        int256[] calldata _absoluteLQTYVetos
+        int256[] calldata _absolutePairSonataVotes,
+        int256[] calldata _absolutePairSonataVetos
     ) external {
         require(
-            _initiatives.length == _absoluteLQTYVotes.length && _absoluteLQTYVotes.length == _absoluteLQTYVetos.length,
+            _initiatives.length == _absolutePairSonataVotes.length
+                && _absolutePairSonataVotes.length == _absolutePairSonataVetos.length,
             "Governance: array-length-mismatch"
         );
 
@@ -531,19 +536,19 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         _requireNoDuplicates(_initiatives);
 
         // Explicit >= 0 checks for all values since we reset values below
-        _requireNoNegatives(_absoluteLQTYVotes);
-        _requireNoNegatives(_absoluteLQTYVetos);
+        _requireNoNegatives(_absolutePairSonataVotes);
+        _requireNoNegatives(_absolutePairSonataVetos);
         // If the goal is to remove all votes from an initiative, including in _initiativesToReset is enough
-        _requireNoNOP(_absoluteLQTYVotes, _absoluteLQTYVetos);
-        _requireNoSimultaneousVoteAndVeto(_absoluteLQTYVotes, _absoluteLQTYVetos);
+        _requireNoNOP(_absolutePairSonataVotes, _absolutePairSonataVetos);
+        _requireNoSimultaneousVoteAndVeto(_absolutePairSonataVotes, _absolutePairSonataVetos);
 
         // You MUST always reset
         ResetInitiativeData[] memory cachedData = _resetInitiatives(_initiativesToReset);
 
         /// Invariant, 0 allocated = 0 votes
         UserState memory userState = userStates[msg.sender];
-        require(userState.allocatedLQTY == 0, "must be a reset");
-        require(userState.unallocatedLQTY != 0, "Governance: insufficient-or-allocated-lqty"); // avoid div-by-zero
+        require(userState.allocatedPairSonata == 0, "must be a reset");
+        require(userState.unallocatedPairSonata != 0, "Governance: insufficient-or-allocated-pairSonata"); // avoid div-by-zero
 
         // After cutoff you can only re-apply the same vote
         // Or vote less
@@ -562,14 +567,14 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
                 for (uint256 y; y < cachedData.length; y++) {
                     if (cachedData[y].initiative == _initiatives[x]) {
                         found = true;
-                        require(_absoluteLQTYVotes[x] <= cachedData[y].LQTYVotes, "Cannot increase");
+                        require(_absolutePairSonataVotes[x] <= cachedData[y].PairSonataVotes, "Cannot increase");
                         break;
                     }
                 }
 
                 // Else we assert that the change is a veto, because by definition the initiatives will have received zero votes past this line
                 if (!found) {
-                    require(_absoluteLQTYVotes[x] == 0, "Must be zero for new initiatives");
+                    require(_absolutePairSonataVotes[x] == 0, "Must be zero for new initiatives");
                 }
             }
         }
@@ -577,32 +582,34 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         int256[] memory absoluteOffsetVotes = new int256[](_initiatives.length);
         int256[] memory absoluteOffsetVetos = new int256[](_initiatives.length);
 
-        // Calculate the offset portions that correspond to each LQTY vote and veto portion
-        // By recalculating `unallocatedLQTY` & `unallocatedOffset` after each step, we ensure that rounding error
+        // Calculate the offset portions that correspond to each PairSonata vote and veto portion
+        // By recalculating `unallocatedPairSonata` & `unallocatedOffset` after each step, we ensure that rounding error
         // doesn't accumulate in `unallocatedOffset`.
         // However, it should be noted that this makes the exact offset allocations dependent on the ordering of the
         // `_initiatives` array.
         for (uint256 x; x < _initiatives.length; x++) {
-            // Either _absoluteLQTYVotes[x] or _absoluteLQTYVetos[x] is guaranteed to be zero
-            (int256[] calldata lqtyAmounts, int256[] memory offsets) = _absoluteLQTYVotes[x] > 0
-                ? (_absoluteLQTYVotes, absoluteOffsetVotes)
-                : (_absoluteLQTYVetos, absoluteOffsetVetos);
+            // Either _absolutePairSonataVotes[x] or _absolutePairSonataVetos[x] is guaranteed to be zero
+            (int256[] calldata pairSonataAmounts, int256[] memory offsets) = _absolutePairSonataVotes[x] > 0
+                ? (_absolutePairSonataVotes, absoluteOffsetVotes)
+                : (_absolutePairSonataVetos, absoluteOffsetVetos);
 
-            uint256 lqtyAmount = uint256(lqtyAmounts[x]);
-            uint256 offset = userState.unallocatedOffset * lqtyAmount / userState.unallocatedLQTY;
+            uint256 pairSonataAmount = uint256(pairSonataAmounts[x]);
+            uint256 offset = userState.unallocatedOffset * pairSonataAmount / userState.unallocatedPairSonata;
 
-            userState.unallocatedLQTY -= lqtyAmount;
+            userState.unallocatedPairSonata -= pairSonataAmount;
             userState.unallocatedOffset -= offset;
 
             offsets[x] = int256(offset);
         }
 
         // Vote here, all values are now absolute changes
-        _allocateLQTY(_initiatives, _absoluteLQTYVotes, _absoluteLQTYVetos, absoluteOffsetVotes, absoluteOffsetVetos);
+        _allocatePairSonata(
+            _initiatives, _absolutePairSonataVotes, _absolutePairSonataVetos, absoluteOffsetVotes, absoluteOffsetVetos
+        );
     }
 
     // Avoid "stack too deep" by placing these variables in memory
-    struct AllocateLQTYMemory {
+    struct AllocatePairSonataMemory {
         VoteSnapshot votesSnapshot_;
         GlobalState state;
         UserState userState;
@@ -611,8 +618,8 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         InitiativeState prevInitiativeState;
         Allocation allocation;
         uint256 currentEpoch;
-        int256 deltaLQTYVotes;
-        int256 deltaLQTYVetos;
+        int256 deltaPairSonataVotes;
+        int256 deltaPairSonataVetos;
         int256 deltaOffsetVotes;
         int256 deltaOffsetVetos;
     }
@@ -621,23 +628,23 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
     /// @dev Assumes that all the input arrays are of equal length
     /// @dev NOTE: Given the current usage the function either: Resets the value to 0, or sets the value to a new value
     ///      Review the flows as the function could be used in many ways, but it ends up being used in just those 2 ways
-    function _allocateLQTY(
+    function _allocatePairSonata(
         address[] memory _initiatives,
-        int256[] memory _deltaLQTYVotes,
-        int256[] memory _deltaLQTYVetos,
+        int256[] memory _deltaPairSonataVotes,
+        int256[] memory _deltaPairSonataVetos,
         int256[] memory _deltaOffsetVotes,
         int256[] memory _deltaOffsetVetos
     ) internal {
-        AllocateLQTYMemory memory vars;
+        AllocatePairSonataMemory memory vars;
         (vars.votesSnapshot_, vars.state) = _snapshotVotes();
         vars.currentEpoch = epoch();
         vars.userState = userStates[msg.sender];
 
         for (uint256 i = 0; i < _initiatives.length; i++) {
             address initiative = _initiatives[i];
-            vars.deltaLQTYVotes = _deltaLQTYVotes[i];
-            vars.deltaLQTYVetos = _deltaLQTYVetos[i];
-            assert(vars.deltaLQTYVotes != 0 || vars.deltaLQTYVetos != 0);
+            vars.deltaPairSonataVotes = _deltaPairSonataVotes[i];
+            vars.deltaPairSonataVetos = _deltaPairSonataVetos[i];
+            assert(vars.deltaPairSonataVotes != 0 || vars.deltaPairSonataVetos != 0);
 
             vars.deltaOffsetVotes = _deltaOffsetVotes[i];
             vars.deltaOffsetVetos = _deltaOffsetVetos[i];
@@ -652,7 +659,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
                 initiative, vars.votesSnapshot_, vars.votesForInitiativeSnapshot_, vars.initiativeState
             );
 
-            if (vars.deltaLQTYVotes > 0 || vars.deltaLQTYVetos > 0) {
+            if (vars.deltaPairSonataVotes > 0 || vars.deltaPairSonataVetos > 0) {
                 /// You cannot vote on `unregisterable` but a vote may have been there
                 require(
                     status == InitiativeStatus.SKIP || status == InitiativeStatus.CLAIMABLE
@@ -662,7 +669,7 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
             }
 
             if (status == InitiativeStatus.DISABLED) {
-                require(vars.deltaLQTYVotes <= 0 && vars.deltaLQTYVetos <= 0, "Must be a withdrawal");
+                require(vars.deltaPairSonataVotes <= 0 && vars.deltaPairSonataVetos <= 0, "Must be a withdrawal");
             }
 
             /// === UPDATE ACCOUNTING === ///
@@ -670,16 +677,16 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
             // deep copy of the initiative's state before the allocation
             vars.prevInitiativeState = InitiativeState(
-                vars.initiativeState.voteLQTY,
+                vars.initiativeState.votePairSonata,
                 vars.initiativeState.voteOffset,
-                vars.initiativeState.vetoLQTY,
+                vars.initiativeState.vetoPairSonata,
                 vars.initiativeState.vetoOffset,
                 vars.initiativeState.lastEpochClaim
             );
 
-            // allocate the voting and vetoing LQTY to the initiative
-            vars.initiativeState.voteLQTY = add(vars.initiativeState.voteLQTY, vars.deltaLQTYVotes);
-            vars.initiativeState.vetoLQTY = add(vars.initiativeState.vetoLQTY, vars.deltaLQTYVetos);
+            // allocate the voting and vetoing PairSonata to the initiative
+            vars.initiativeState.votePairSonata = add(vars.initiativeState.votePairSonata, vars.deltaPairSonataVotes);
+            vars.initiativeState.vetoPairSonata = add(vars.initiativeState.vetoPairSonata, vars.deltaPairSonataVetos);
 
             // Update the initiative's vote and veto offsets
             vars.initiativeState.voteOffset = add(vars.initiativeState.voteOffset, vars.deltaOffsetVotes);
@@ -693,49 +700,49 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
             /// We update the state only for non-disabled initiatives
             /// Disabled initiatves have had their totals subtracted already
             if (status != InitiativeStatus.DISABLED) {
-                assert(vars.state.countedVoteLQTY >= vars.prevInitiativeState.voteLQTY);
+                assert(vars.state.countedVotePairSonata >= vars.prevInitiativeState.votePairSonata);
 
-                // Remove old initative LQTY and offset from global count
-                vars.state.countedVoteLQTY -= vars.prevInitiativeState.voteLQTY;
+                // Remove old initative PairSonata and offset from global count
+                vars.state.countedVotePairSonata -= vars.prevInitiativeState.votePairSonata;
                 vars.state.countedVoteOffset -= vars.prevInitiativeState.voteOffset;
 
-                // Add new initative LQTY and offset to global count
-                vars.state.countedVoteLQTY += vars.initiativeState.voteLQTY;
+                // Add new initative PairSonata and offset to global count
+                vars.state.countedVotePairSonata += vars.initiativeState.votePairSonata;
                 vars.state.countedVoteOffset += vars.initiativeState.voteOffset;
             }
 
             // == USER ALLOCATION TO INITIATIVE == //
 
-            // Record the vote and veto LQTY and offsets by user to initative
-            vars.allocation = lqtyAllocatedByUserToInitiative[msg.sender][initiative];
+            // Record the vote and veto PairSonata and offsets by user to initative
+            vars.allocation = pairSonataAllocatedByUserToInitiative[msg.sender][initiative];
             // Update offsets
             vars.allocation.voteOffset = add(vars.allocation.voteOffset, vars.deltaOffsetVotes);
             vars.allocation.vetoOffset = add(vars.allocation.vetoOffset, vars.deltaOffsetVetos);
 
             // Update votes and vetos
-            vars.allocation.voteLQTY = add(vars.allocation.voteLQTY, vars.deltaLQTYVotes);
-            vars.allocation.vetoLQTY = add(vars.allocation.vetoLQTY, vars.deltaLQTYVetos);
+            vars.allocation.votePairSonata = add(vars.allocation.votePairSonata, vars.deltaPairSonataVotes);
+            vars.allocation.vetoPairSonata = add(vars.allocation.vetoPairSonata, vars.deltaPairSonataVetos);
 
             vars.allocation.atEpoch = vars.currentEpoch;
 
             // Voting power allocated to initiatives should never be negative, else it might break reward allocation
             // schemes such as `BribeInitiative` which distribute rewards in proportion to voting power allocated.
-            assert(vars.allocation.voteLQTY * block.timestamp >= vars.allocation.voteOffset);
-            assert(vars.allocation.vetoLQTY * block.timestamp >= vars.allocation.vetoOffset);
+            assert(vars.allocation.votePairSonata * block.timestamp >= vars.allocation.voteOffset);
+            assert(vars.allocation.vetoPairSonata * block.timestamp >= vars.allocation.vetoOffset);
 
-            lqtyAllocatedByUserToInitiative[msg.sender][initiative] = vars.allocation;
+            pairSonataAllocatedByUserToInitiative[msg.sender][initiative] = vars.allocation;
 
             // == USER STATE == //
 
-            // Remove from the user's unallocated LQTY and offset
-            vars.userState.unallocatedLQTY =
-                sub(vars.userState.unallocatedLQTY, (vars.deltaLQTYVotes + vars.deltaLQTYVetos));
+            // Remove from the user's unallocated PairSonata and offset
+            vars.userState.unallocatedPairSonata =
+                sub(vars.userState.unallocatedPairSonata, (vars.deltaPairSonataVotes + vars.deltaPairSonataVetos));
             vars.userState.unallocatedOffset =
                 sub(vars.userState.unallocatedOffset, (vars.deltaOffsetVotes + vars.deltaOffsetVetos));
 
-            // Add to the user's allocated LQTY and offset
-            vars.userState.allocatedLQTY =
-                add(vars.userState.allocatedLQTY, (vars.deltaLQTYVotes + vars.deltaLQTYVetos));
+            // Add to the user's allocated PairSonata and offset
+            vars.userState.allocatedPairSonata =
+                add(vars.userState.allocatedPairSonata, (vars.deltaPairSonataVotes + vars.deltaPairSonataVetos));
             vars.userState.allocatedOffset =
                 add(vars.userState.allocatedOffset, (vars.deltaOffsetVotes + vars.deltaOffsetVetos));
 
@@ -743,17 +750,17 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
 
             // See https://github.com/liquity/V2-gov/issues/125
             // A malicious initiative could try to dissuade voters from casting vetos by consuming as much gas as
-            // possible in the `onAfterAllocateLQTY` hook when detecting vetos.
+            // possible in the `onAfterAllocatePairSonata` hook when detecting vetos.
             // We deem that the risks of calling into malicous initiatives upon veto allocation far outweigh the
             // benefits of notifying benevolent initiatives of vetos.
-            if (vars.allocation.vetoLQTY == 0) {
+            if (vars.allocation.vetoPairSonata == 0) {
                 // Replaces try / catch | Enforces sufficient gas is passed
                 hookStatus = safeCallWithMinGas(
                     initiative,
                     MIN_GAS_TO_HOOK,
                     0,
                     abi.encodeCall(
-                        IInitiative.onAfterAllocateLQTY,
+                        IInitiative.onAfterAllocatePairSonata,
                         (vars.currentEpoch, msg.sender, vars.userState, vars.allocation, vars.initiativeState)
                     )
                 ) ? HookStatus.Succeeded : HookStatus.Failed;
@@ -761,12 +768,19 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
                 hookStatus = HookStatus.NotCalled;
             }
 
-            emit AllocateLQTY(
-                msg.sender, initiative, vars.deltaLQTYVotes, vars.deltaLQTYVetos, vars.currentEpoch, hookStatus
+            emit AllocatePairSonata(
+                msg.sender,
+                initiative,
+                vars.deltaPairSonataVotes,
+                vars.deltaPairSonataVetos,
+                vars.currentEpoch,
+                hookStatus
             );
         }
 
-        require(vars.userState.allocatedLQTY <= stakes[msg.sender], "Governance: insufficient-or-allocated-lqty");
+        require(
+            vars.userState.allocatedPairSonata <= stakes[msg.sender], "Governance: insufficient-or-allocated-pairSonata"
+        );
 
         globalState = vars.state;
         userStates[msg.sender] = vars.userState;
@@ -789,10 +803,10 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         // NOTE: Safe to remove | See `check_claim_soundness`
         assert(initiativeState.lastEpochClaim < currentEpoch - 1);
 
-        assert(state.countedVoteLQTY >= initiativeState.voteLQTY);
+        assert(state.countedVotePairSonata >= initiativeState.votePairSonata);
         assert(state.countedVoteOffset >= initiativeState.voteOffset);
 
-        state.countedVoteLQTY -= initiativeState.voteLQTY;
+        state.countedVotePairSonata -= initiativeState.votePairSonata;
         state.countedVoteOffset -= initiativeState.voteOffset;
 
         globalState = state;
@@ -834,12 +848,12 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         /// INVARIANT, because of rounding errors the system can overpay
         /// We upscale the timestamp to reduce the impact of the loss
         /// However this is still possible
-        uint256 available = bold.balanceOf(address(this));
+        uint256 available = one.balanceOf(address(this));
         if (claimableAmount > available) {
             claimableAmount = available;
         }
 
-        bold.safeTransfer(_initiative, claimableAmount);
+        one.safeTransfer(_initiative, claimableAmount);
 
         // Replaces try / catch | Enforces sufficient gas is passed
         bool success = safeCallWithMinGas(
@@ -856,18 +870,21 @@ contract Governance is MultiDelegateCall, Ownable, IGovernance {
         return claimableAmount;
     }
 
-    function _requireNoNOP(int256[] memory _absoluteLQTYVotes, int256[] memory _absoluteLQTYVetos) internal pure {
-        for (uint256 i; i < _absoluteLQTYVotes.length; i++) {
-            require(_absoluteLQTYVotes[i] > 0 || _absoluteLQTYVetos[i] > 0, "Governance: voting nothing");
-        }
-    }
-
-    function _requireNoSimultaneousVoteAndVeto(int256[] memory _absoluteLQTYVotes, int256[] memory _absoluteLQTYVetos)
+    function _requireNoNOP(int256[] memory _absolutePairSonataVotes, int256[] memory _absolutePairSonataVetos)
         internal
         pure
     {
-        for (uint256 i; i < _absoluteLQTYVotes.length; i++) {
-            require(_absoluteLQTYVotes[i] == 0 || _absoluteLQTYVetos[i] == 0, "Governance: vote-and-veto");
+        for (uint256 i; i < _absolutePairSonataVotes.length; i++) {
+            require(_absolutePairSonataVotes[i] > 0 || _absolutePairSonataVetos[i] > 0, "Governance: voting nothing");
+        }
+    }
+
+    function _requireNoSimultaneousVoteAndVeto(
+        int256[] memory _absolutePairSonataVotes,
+        int256[] memory _absolutePairSonataVetos
+    ) internal pure {
+        for (uint256 i; i < _absolutePairSonataVotes.length; i++) {
+            require(_absolutePairSonataVotes[i] == 0 || _absolutePairSonataVetos[i] == 0, "Governance: vote-and-veto");
         }
     }
 }

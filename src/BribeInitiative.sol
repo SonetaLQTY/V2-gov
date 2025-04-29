@@ -9,7 +9,7 @@ import {IInitiative} from "./interfaces/IInitiative.sol";
 import {IBribeInitiative} from "./interfaces/IBribeInitiative.sol";
 
 import {DoubleLinkedList} from "./utils/DoubleLinkedList.sol";
-import {_lqtyToVotes} from "./utils/VotingPower.sol";
+import {_pairSonataToVotes} from "./utils/VotingPower.sol";
 
 contract BribeInitiative is IInitiative, IBribeInitiative {
     using SafeERC20 for IERC20;
@@ -21,7 +21,7 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
     /// @inheritdoc IBribeInitiative
     IGovernance public immutable governance;
     /// @inheritdoc IBribeInitiative
-    IERC20 public immutable bold;
+    IERC20 public immutable one;
     /// @inheritdoc IBribeInitiative
     IERC20 public immutable bribeToken;
 
@@ -30,16 +30,16 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
     /// @inheritdoc IBribeInitiative
     mapping(address => mapping(uint256 => bool)) public claimedBribeAtEpoch;
 
-    /// Double linked list of the total LQTY allocated at a given epoch
-    DoubleLinkedList.List internal totalLQTYAllocationByEpoch;
-    /// Double linked list of LQTY allocated by a user at a given epoch
-    mapping(address => DoubleLinkedList.List) internal lqtyAllocationByUserAtEpoch;
+    /// Double linked list of the total PairSonata allocated at a given epoch
+    DoubleLinkedList.List internal totalPairSonataAllocationByEpoch;
+    /// Double linked list of PairSonata allocated by a user at a given epoch
+    mapping(address => DoubleLinkedList.List) internal pairSonataAllocationByUserAtEpoch;
 
-    constructor(address _governance, address _bold, address _bribeToken) {
-        require(_bribeToken != _bold, "BribeInitiative: bribe-token-cannot-be-bold");
+    constructor(address _governance, address _one, address _bribeToken) {
+        require(_bribeToken != _one, "BribeInitiative: bribe-token-cannot-be-one");
 
         governance = IGovernance(_governance);
-        bold = IERC20(_bold);
+        one = IERC20(_one);
         bribeToken = IERC20(_bribeToken);
 
         EPOCH_START = governance.EPOCH_START();
@@ -52,99 +52,107 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
     }
 
     /// @inheritdoc IBribeInitiative
-    function totalLQTYAllocatedByEpoch(uint256 _epoch) external view returns (uint256, uint256) {
-        return (totalLQTYAllocationByEpoch.items[_epoch].lqty, totalLQTYAllocationByEpoch.items[_epoch].offset);
-    }
-
-    /// @inheritdoc IBribeInitiative
-    function lqtyAllocatedByUserAtEpoch(address _user, uint256 _epoch) external view returns (uint256, uint256) {
+    function totalPairSonataAllocatedByEpoch(uint256 _epoch) external view returns (uint256, uint256) {
         return (
-            lqtyAllocationByUserAtEpoch[_user].items[_epoch].lqty,
-            lqtyAllocationByUserAtEpoch[_user].items[_epoch].offset
+            totalPairSonataAllocationByEpoch.items[_epoch].pairSonata,
+            totalPairSonataAllocationByEpoch.items[_epoch].offset
         );
     }
 
     /// @inheritdoc IBribeInitiative
-    function depositBribe(uint256 _boldAmount, uint256 _bribeTokenAmount, uint256 _epoch) external {
+    function pairSonataAllocatedByUserAtEpoch(address _user, uint256 _epoch) external view returns (uint256, uint256) {
+        return (
+            pairSonataAllocationByUserAtEpoch[_user].items[_epoch].pairSonata,
+            pairSonataAllocationByUserAtEpoch[_user].items[_epoch].offset
+        );
+    }
+
+    /// @inheritdoc IBribeInitiative
+    function depositBribe(uint256 _oneAmount, uint256 _bribeTokenAmount, uint256 _epoch) external {
         uint256 epoch = governance.epoch();
         require(_epoch >= epoch, "BribeInitiative: now-or-future-epochs");
 
-        bribeByEpoch[_epoch].remainingBoldAmount += _boldAmount;
+        bribeByEpoch[_epoch].remainingOneAmount += _oneAmount;
         bribeByEpoch[_epoch].remainingBribeTokenAmount += _bribeTokenAmount;
 
-        emit DepositBribe(msg.sender, _boldAmount, _bribeTokenAmount, _epoch);
+        emit DepositBribe(msg.sender, _oneAmount, _bribeTokenAmount, _epoch);
 
-        bold.safeTransferFrom(msg.sender, address(this), _boldAmount);
+        one.safeTransferFrom(msg.sender, address(this), _oneAmount);
         bribeToken.safeTransferFrom(msg.sender, address(this), _bribeTokenAmount);
     }
 
     function _claimBribe(
         address _user,
         uint256 _epoch,
-        uint256 _prevLQTYAllocationEpoch,
-        uint256 _prevTotalLQTYAllocationEpoch
-    ) internal returns (uint256 boldAmount, uint256 bribeTokenAmount) {
+        uint256 _prevPairSonataAllocationEpoch,
+        uint256 _prevTotalPairSonataAllocationEpoch
+    ) internal returns (uint256 oneAmount, uint256 bribeTokenAmount) {
         require(_epoch < governance.epoch(), "BribeInitiative: cannot-claim-for-current-epoch");
         require(!claimedBribeAtEpoch[_user][_epoch], "BribeInitiative: already-claimed");
 
         Bribe memory bribe = bribeByEpoch[_epoch];
-        require(bribe.remainingBoldAmount != 0 || bribe.remainingBribeTokenAmount != 0, "BribeInitiative: no-bribe");
+        require(bribe.remainingOneAmount != 0 || bribe.remainingBribeTokenAmount != 0, "BribeInitiative: no-bribe");
 
-        DoubleLinkedList.Item memory lqtyAllocation =
-            lqtyAllocationByUserAtEpoch[_user].getItem(_prevLQTYAllocationEpoch);
+        DoubleLinkedList.Item memory pairSonataAllocation =
+            pairSonataAllocationByUserAtEpoch[_user].getItem(_prevPairSonataAllocationEpoch);
 
         require(
-            _prevLQTYAllocationEpoch <= _epoch && (lqtyAllocation.next > _epoch || lqtyAllocation.next == 0),
-            "BribeInitiative: invalid-prev-lqty-allocation-epoch"
+            _prevPairSonataAllocationEpoch <= _epoch
+                && (pairSonataAllocation.next > _epoch || pairSonataAllocation.next == 0),
+            "BribeInitiative: invalid-prev-pairSonata-allocation-epoch"
         );
-        DoubleLinkedList.Item memory totalLQTYAllocation =
-            totalLQTYAllocationByEpoch.getItem(_prevTotalLQTYAllocationEpoch);
+        DoubleLinkedList.Item memory totalPairSonataAllocation =
+            totalPairSonataAllocationByEpoch.getItem(_prevTotalPairSonataAllocationEpoch);
         require(
-            _prevTotalLQTYAllocationEpoch <= _epoch
-                && (totalLQTYAllocation.next > _epoch || totalLQTYAllocation.next == 0),
-            "BribeInitiative: invalid-prev-total-lqty-allocation-epoch"
+            _prevTotalPairSonataAllocationEpoch <= _epoch
+                && (totalPairSonataAllocation.next > _epoch || totalPairSonataAllocation.next == 0),
+            "BribeInitiative: invalid-prev-total-pairSonata-allocation-epoch"
         );
 
-        require(totalLQTYAllocation.lqty > 0, "BribeInitiative: total-lqty-allocation-zero");
-        require(lqtyAllocation.lqty > 0, "BribeInitiative: lqty-allocation-zero");
+        require(totalPairSonataAllocation.pairSonata > 0, "BribeInitiative: total-pairSonata-allocation-zero");
+        require(pairSonataAllocation.pairSonata > 0, "BribeInitiative: pairSonata-allocation-zero");
 
         // `Governance` guarantees that `votes` evaluates to 0 or greater for each initiative at the time of allocation.
         // Since the last possible moment to allocate within this epoch is 1 second before `epochEnd`, we have that:
-        //  - `lqtyAllocation.lqty > 0` implies `votes > 0`
-        //  - `totalLQTYAllocation.lqty > 0` implies `totalVotes > 0`
+        //  - `pairSonataAllocation.pairSonata > 0` implies `votes > 0`
+        //  - `totalPairSonataAllocation.pairSonata > 0` implies `totalVotes > 0`
 
         uint256 epochEnd = EPOCH_START + _epoch * EPOCH_DURATION;
-        uint256 totalVotes = _lqtyToVotes(totalLQTYAllocation.lqty, epochEnd, totalLQTYAllocation.offset);
-        uint256 votes = _lqtyToVotes(lqtyAllocation.lqty, epochEnd, lqtyAllocation.offset);
+        uint256 totalVotes =
+            _pairSonataToVotes(totalPairSonataAllocation.pairSonata, epochEnd, totalPairSonataAllocation.offset);
+        uint256 votes = _pairSonataToVotes(pairSonataAllocation.pairSonata, epochEnd, pairSonataAllocation.offset);
         uint256 remainingVotes = totalVotes - bribe.claimedVotes;
 
-        boldAmount = bribe.remainingBoldAmount * votes / remainingVotes;
+        oneAmount = bribe.remainingOneAmount * votes / remainingVotes;
         bribeTokenAmount = bribe.remainingBribeTokenAmount * votes / remainingVotes;
-        bribe.remainingBoldAmount -= boldAmount;
+        bribe.remainingOneAmount -= oneAmount;
         bribe.remainingBribeTokenAmount -= bribeTokenAmount;
         bribe.claimedVotes += votes;
 
         bribeByEpoch[_epoch] = bribe;
         claimedBribeAtEpoch[_user][_epoch] = true;
 
-        emit ClaimBribe(_user, _epoch, boldAmount, bribeTokenAmount);
+        emit ClaimBribe(_user, _epoch, oneAmount, bribeTokenAmount);
     }
 
     /// @inheritdoc IBribeInitiative
     function claimBribes(ClaimData[] calldata _claimData)
         external
-        returns (uint256 boldAmount, uint256 bribeTokenAmount)
+        returns (uint256 oneAmount, uint256 bribeTokenAmount)
     {
         for (uint256 i = 0; i < _claimData.length; i++) {
             ClaimData memory claimData = _claimData[i];
-            (uint256 boldAmount_, uint256 bribeTokenAmount_) = _claimBribe(
-                msg.sender, claimData.epoch, claimData.prevLQTYAllocationEpoch, claimData.prevTotalLQTYAllocationEpoch
+            (uint256 oneAmount_, uint256 bribeTokenAmount_) = _claimBribe(
+                msg.sender,
+                claimData.epoch,
+                claimData.prevPairSonataAllocationEpoch,
+                claimData.prevTotalPairSonataAllocationEpoch
             );
-            boldAmount += boldAmount_;
+            oneAmount += oneAmount_;
             bribeTokenAmount += bribeTokenAmount_;
         }
 
-        if (boldAmount != 0) bold.safeTransfer(msg.sender, boldAmount);
+        if (oneAmount != 0) one.safeTransfer(msg.sender, oneAmount);
         if (bribeTokenAmount != 0) bribeToken.safeTransfer(msg.sender, bribeTokenAmount);
     }
 
@@ -154,67 +162,69 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
     /// @inheritdoc IInitiative
     function onUnregisterInitiative(uint256) external virtual override onlyGovernance {}
 
-    function _setTotalLQTYAllocationByEpoch(uint256 _epoch, uint256 _lqty, uint256 _offset, bool _insert) private {
+    function _setTotalPairSonataAllocationByEpoch(uint256 _epoch, uint256 _pairSonata, uint256 _offset, bool _insert)
+        private
+    {
         if (_insert) {
-            totalLQTYAllocationByEpoch.insert(_epoch, _lqty, _offset, 0);
+            totalPairSonataAllocationByEpoch.insert(_epoch, _pairSonata, _offset, 0);
         } else {
-            totalLQTYAllocationByEpoch.items[_epoch].lqty = _lqty;
-            totalLQTYAllocationByEpoch.items[_epoch].offset = _offset;
+            totalPairSonataAllocationByEpoch.items[_epoch].pairSonata = _pairSonata;
+            totalPairSonataAllocationByEpoch.items[_epoch].offset = _offset;
         }
-        emit ModifyTotalLQTYAllocation(_epoch, _lqty, _offset);
+        emit ModifyTotalPairSonataAllocation(_epoch, _pairSonata, _offset);
     }
 
-    function _setLQTYAllocationByUserAtEpoch(
+    function _setPairSonataAllocationByUserAtEpoch(
         address _user,
         uint256 _epoch,
-        uint256 _lqty,
+        uint256 _pairSonata,
         uint256 _offset,
         bool _insert
     ) private {
         if (_insert) {
-            lqtyAllocationByUserAtEpoch[_user].insert(_epoch, _lqty, _offset, 0);
+            pairSonataAllocationByUserAtEpoch[_user].insert(_epoch, _pairSonata, _offset, 0);
         } else {
-            lqtyAllocationByUserAtEpoch[_user].items[_epoch].lqty = _lqty;
-            lqtyAllocationByUserAtEpoch[_user].items[_epoch].offset = _offset;
+            pairSonataAllocationByUserAtEpoch[_user].items[_epoch].pairSonata = _pairSonata;
+            pairSonataAllocationByUserAtEpoch[_user].items[_epoch].offset = _offset;
         }
-        emit ModifyLQTYAllocation(_user, _epoch, _lqty, _offset);
+        emit ModifyPairSonataAllocation(_user, _epoch, _pairSonata, _offset);
     }
 
     /// @inheritdoc IBribeInitiative
     function getMostRecentUserEpoch(address _user) external view returns (uint256) {
-        uint256 mostRecentUserEpoch = lqtyAllocationByUserAtEpoch[_user].getHead();
+        uint256 mostRecentUserEpoch = pairSonataAllocationByUserAtEpoch[_user].getHead();
 
         return mostRecentUserEpoch;
     }
 
     /// @inheritdoc IBribeInitiative
     function getMostRecentTotalEpoch() external view returns (uint256) {
-        uint256 mostRecentTotalEpoch = totalLQTYAllocationByEpoch.getHead();
+        uint256 mostRecentTotalEpoch = totalPairSonataAllocationByEpoch.getHead();
 
         return mostRecentTotalEpoch;
     }
 
-    function onAfterAllocateLQTY(
+    function onAfterAllocatePairSonata(
         uint256 _currentEpoch,
         address _user,
         IGovernance.UserState calldata,
         IGovernance.Allocation calldata _allocation,
         IGovernance.InitiativeState calldata _initiativeState
     ) external virtual onlyGovernance {
-        uint256 mostRecentUserEpoch = lqtyAllocationByUserAtEpoch[_user].getHead();
-        uint256 mostRecentTotalEpoch = totalLQTYAllocationByEpoch.getHead();
+        uint256 mostRecentUserEpoch = pairSonataAllocationByUserAtEpoch[_user].getHead();
+        uint256 mostRecentTotalEpoch = totalPairSonataAllocationByEpoch.getHead();
 
-        _setTotalLQTYAllocationByEpoch(
+        _setTotalPairSonataAllocationByEpoch(
             _currentEpoch,
-            _initiativeState.voteLQTY,
+            _initiativeState.votePairSonata,
             _initiativeState.voteOffset,
             mostRecentTotalEpoch != _currentEpoch // Insert if current > recent
         );
 
-        _setLQTYAllocationByUserAtEpoch(
+        _setPairSonataAllocationByUserAtEpoch(
             _user,
             _currentEpoch,
-            _allocation.voteLQTY,
+            _allocation.votePairSonata,
             _allocation.voteOffset,
             mostRecentUserEpoch != _currentEpoch // Insert if user current > recent
         );
