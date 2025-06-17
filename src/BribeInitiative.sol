@@ -9,7 +9,7 @@ import {IInitiative} from "./interfaces/IInitiative.sol";
 import {IBribeInitiative} from "./interfaces/IBribeInitiative.sol";
 
 import {DoubleLinkedList} from "./utils/DoubleLinkedList.sol";
-import {_lqtyToVotes} from "./utils/VotingPower.sol";
+import {_lpTokenToVotes} from "./utils/VotingPower.sol";
 
 contract BribeInitiative is IInitiative, IBribeInitiative {
     using SafeERC20 for IERC20;
@@ -114,8 +114,8 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
         //  - `totalLQTYAllocation.lqty > 0` implies `totalVotes > 0`
 
         uint256 epochEnd = EPOCH_START + _epoch * EPOCH_DURATION;
-        uint256 totalVotes = _lqtyToVotes(totalLQTYAllocation.lqty, epochEnd, totalLQTYAllocation.offset);
-        uint256 votes = _lqtyToVotes(lqtyAllocation.lqty, epochEnd, lqtyAllocation.offset);
+        uint256 totalVotes = _lpTokenToVotes(totalLQTYAllocation.lqty, epochEnd, totalLQTYAllocation.offset);
+        uint256 votes = _lpTokenToVotes(lqtyAllocation.lqty, epochEnd, lqtyAllocation.offset);
         uint256 remainingVotes = totalVotes - bribe.claimedVotes;
 
         boldAmount = bribe.remainingBoldAmount * votes / remainingVotes;
@@ -206,7 +206,7 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
 
         _setTotalLQTYAllocationByEpoch(
             _currentEpoch,
-            _initiativeState.voteLQTY,
+            _initiativeState.voteLPToken,
             _initiativeState.voteOffset,
             mostRecentTotalEpoch != _currentEpoch // Insert if current > recent
         );
@@ -214,7 +214,7 @@ contract BribeInitiative is IInitiative, IBribeInitiative {
         _setLQTYAllocationByUserAtEpoch(
             _user,
             _currentEpoch,
-            _allocation.voteLQTY,
+            _allocation.voteLPToken,
             _allocation.voteOffset,
             mostRecentUserEpoch != _currentEpoch // Insert if user current > recent
         );
