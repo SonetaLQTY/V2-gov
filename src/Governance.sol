@@ -5,7 +5,7 @@ import {IERC20} from "openzeppelin/contracts/interfaces/IERC20.sol";
 import {SafeERC20} from "openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-import {IGovernance, UNREGISTERED_INITIATIVE} from "./interfaces/IGovernance.sol";
+import {IGovernance, ISingleStaking, UNREGISTERED_INITIATIVE} from "./interfaces/IGovernance.sol";
 import {IInitiative} from "./interfaces/IInitiative.sol";
 
 import {add, sub, max} from "./utils/Math.sol";
@@ -14,7 +14,7 @@ import {MultiDelegateCall} from "./utils/MultiDelegateCall.sol";
 import {WAD} from "./utils/Types.sol";
 import {safeCallWithMinGas} from "./utils/SafeCallMinGas.sol";
 import {Ownable} from "./utils/Ownable.sol";
-import {_lpTokenToVotes} from "./utils/VotingPower.sol";
+import {_staTokenToVotes} from "./utils/VotingPower.sol";
 
 /// @title Governance: Modular Initiative based Governance
 contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance {
@@ -25,7 +25,7 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     /// Replace this to ensure hooks have sufficient gas
 
     /// @inheritdoc IGovernance
-    IERC20 public immutable lpToken;
+    IERC20 public immutable staToken;
     /// @inheritdoc IGovernance
     IERC20 public immutable one;
     /// @inheritdoc IGovernance
@@ -48,6 +48,8 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     uint256 public immutable UNREGISTRATION_AFTER_EPOCHS;
     /// @inheritdoc IGovernance
     uint256 public immutable VOTING_THRESHOLD_FACTOR;
+    /// @inheritdoc IGovernance
+    ISingleStaking public immutable STAKING_CONTRACT;
 
     /// @inheritdoc IGovernance
     uint256 public oneAccrued;
@@ -64,19 +66,24 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     /// @inheritdoc IGovernance
     mapping(address => InitiativeState) public initiativeStates;
     /// @inheritdoc IGovernance
-    mapping(address => mapping(address => Allocation)) public lpTokenAllocatedByUserToInitiative;
+    mapping(address => mapping(address => Allocation)) public staTokenAllocatedByUserToInitiative;
     /// @inheritdoc IGovernance
     mapping(address => uint256) public override registeredInitiatives;
 
     constructor(
-        address _lpToken,
+        address _staToken,
         address _one,
+        address _stakingContract,
         Configuration memory _config,
         address _owner,
         address[] memory _initiatives
     ) Ownable(_owner) {
-        lpToken = IERC20(_lpToken);
+        staToken = IERC20(_staToken);
         one = IERC20(_one);
+        STAKING_CONTRACT = ISingleStaking(_stakingContract);
+
+        staToken.approve(address(STAKING_CONTRACT), type(uint256).max);
+
         require(_config.minClaim <= _config.minAccrual, "Gov: min-claim-gt-min-accrual");
         REGISTRATION_FEE = _config.registrationFee;
 
@@ -128,42 +135,43 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     //////////////////////////////////////////////////////////////*/
 
     /// @inheritdoc IGovernance
-    function deposit(uint256 _lpTokenAmount) external {
-        require(_lpTokenAmount > 0, "Governance: zero-lpToken-amount");
+    function deposit(uint256 _staTokenAmount) external {
+        require(_staTokenAmount > 0, "Governance: zero-staToken-amount");
 
-        userStates[msg.sender].unallocatedLPToken += _lpTokenAmount;
-        userStates[msg.sender].unallocatedOffset += block.timestamp * _lpTokenAmount;
-        userStates[msg.sender].totalLpToken += _lpTokenAmount;
+        userStates[msg.sender].unallocatedSTAToken += _staTokenAmount;
+        userStates[msg.sender].unallocatedOffset += block.timestamp * _staTokenAmount;
+        userStates[msg.sender].totalLpToken += _staTokenAmount;
 
-        lpToken.transferFrom(msg.sender, address(this), _lpTokenAmount);
+        staToken.transferFrom(msg.sender, address(this), _staTokenAmount);
+        STAKING_CONTRACT.depositAsAuthority(msg.sender, _staTokenAmount);
 
-        emit DepositLPToken(msg.sender, _lpTokenAmount);
+        emit DepositSTAToken(msg.sender, _staTokenAmount);
     }
 
     /// @inheritdoc IGovernance
-    function withdraw(uint256 _lpTokenAmount) external {
+    function withdraw(uint256 _staTokenAmount) external {
         UserState storage userState = userStates[msg.sender];
 
-        // check if user has enough unallocated lpToken
-        require(_lpTokenAmount <= userState.unallocatedLPToken, "Governance: insufficient-unallocated-lpToken");
+        // check if user has enough unallocated staToken
+        require(_staTokenAmount <= userState.unallocatedSTAToken, "Governance: insufficient-unallocated-staToken");
 
         // Update the offset tracker
-        if (_lpTokenAmount < userState.unallocatedLPToken) {
-            // The offset decrease is proportional to the partial lpToken decrease
-            uint256 offsetDecrease = _lpTokenAmount * userState.unallocatedOffset / userState.unallocatedLPToken;
+        if (_staTokenAmount < userState.unallocatedSTAToken) {
+            // The offset decrease is proportional to the partial staToken decrease
+            uint256 offsetDecrease = _staTokenAmount * userState.unallocatedOffset / userState.unallocatedSTAToken;
             userState.unallocatedOffset -= offsetDecrease;
         } else {
-            // if _lpTokenAmount == userState.unallocatedLPToken, zero the offset tracker
+            // if _staTokenAmount == userState.unallocatedSTAToken, zero the offset tracker
             userState.unallocatedOffset = 0;
         }
 
-        // Update the user's LPToken tracker
-        userState.unallocatedLPToken -= _lpTokenAmount;
-        userState.totalLpToken -= _lpTokenAmount;
+        // Update the user's STAToken tracker
+        userState.unallocatedSTAToken -= _staTokenAmount;
+        userState.totalLpToken -= _staTokenAmount;
 
-        lpToken.transfer(msg.sender, _lpTokenAmount);
+        STAKING_CONTRACT.withdrawAsAuthority(msg.sender, _staTokenAmount);
 
-        emit WithdrawLPToken(msg.sender, _lpTokenAmount);
+        emit WithdrawSTAToken(msg.sender, _staTokenAmount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -186,12 +194,12 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     }
 
     /// @inheritdoc IGovernance
-    function lpTokenToVotes(uint256 _lpTokenAmount, uint256 _timestamp, uint256 _offset)
+    function staTokenToVotes(uint256 _staTokenAmount, uint256 _timestamp, uint256 _offset)
         public
         pure
         returns (uint256)
     {
-        return _lpTokenToVotes(_lpTokenAmount, _timestamp, _offset);
+        return _staTokenToVotes(_staTokenAmount, _timestamp, _offset);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -251,7 +259,7 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         if (snapshot.forEpoch < currentEpoch - 1) {
             shouldUpdate = true;
 
-            snapshot.votes = lpTokenToVotes(state.countedVoteLPToken, epochStart(), state.countedVoteOffset);
+            snapshot.votes = staTokenToVotes(state.countedVoteSTAToken, epochStart(), state.countedVoteOffset);
             snapshot.forEpoch = currentEpoch - 1;
         }
     }
@@ -291,8 +299,8 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
             shouldUpdate = true;
 
             uint256 start = epochStart();
-            uint256 votes = lpTokenToVotes(initiativeState.voteLPToken, start, initiativeState.voteOffset);
-            uint256 vetos = lpTokenToVotes(initiativeState.vetoLPToken, start, initiativeState.vetoOffset);
+            uint256 votes = staTokenToVotes(initiativeState.voteSTAToken, start, initiativeState.voteOffset);
+            uint256 vetos = staTokenToVotes(initiativeState.vetoSTAToken, start, initiativeState.vetoOffset);
             initiativeSnapshot.votes = votes;
             initiativeSnapshot.vetos = vetos;
 
@@ -413,17 +421,17 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
 
         one.safeTransferFrom(msg.sender, address(this), REGISTRATION_FEE);
 
-        // an initiative can be registered if the registrant has more voting power (LPToken * age)
+        // an initiative can be registered if the registrant has more voting power (STAToken * age)
         // than the registration threshold derived from the previous epoch's total global votes
 
         uint256 upscaledSnapshotVotes = snapshot.votes;
 
         uint256 totalUserOffset = userState.allocatedOffset + userState.unallocatedOffset;
         require(
-            // Check against the user's total voting power, so include both allocated and unallocated LPToken
-            lpTokenToVotes(userState.totalLpToken, epochStart(), totalUserOffset)
+            // Check against the user's total voting power, so include both allocated and unallocated STAToken
+            staTokenToVotes(userState.totalLpToken, epochStart(), totalUserOffset)
                 >= upscaledSnapshotVotes * REGISTRATION_THRESHOLD_FACTOR / WAD,
-            "Governance: insufficient-lpToken"
+            "Governance: insufficient-staToken"
         );
 
         registeredInitiatives[_initiative] = currentEpoch;
@@ -443,8 +451,8 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
 
     struct ResetInitiativeData {
         address initiative;
-        int256 LPTokenVotes;
-        int256 LPTokenVetos;
+        int256 STATokenVotes;
+        int256 STATokenVetos;
         int256 OffsetVotes;
         int256 OffsetVetos;
     }
@@ -458,34 +466,36 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     {
         ResetInitiativeData[] memory cachedData = new ResetInitiativeData[](_initiativesToReset.length);
 
-        int256[] memory deltaLPTokenVotes = new int256[](_initiativesToReset.length);
-        int256[] memory deltaLPTokenVetos = new int256[](_initiativesToReset.length);
+        int256[] memory deltaSTATokenVotes = new int256[](_initiativesToReset.length);
+        int256[] memory deltaSTATokenVetos = new int256[](_initiativesToReset.length);
         int256[] memory deltaOffsetVotes = new int256[](_initiativesToReset.length);
         int256[] memory deltaOffsetVetos = new int256[](_initiativesToReset.length);
 
         // Prepare reset data
         for (uint256 i; i < _initiativesToReset.length; i++) {
-            Allocation memory alloc = lpTokenAllocatedByUserToInitiative[msg.sender][_initiativesToReset[i]];
-            require(alloc.voteLPToken > 0 || alloc.vetoLPToken > 0, "Governance: nothing to reset");
+            Allocation memory alloc = staTokenAllocatedByUserToInitiative[msg.sender][_initiativesToReset[i]];
+            require(alloc.voteSTAToken > 0 || alloc.vetoSTAToken > 0, "Governance: nothing to reset");
 
             // Cache, used to enforce limits later
             cachedData[i] = ResetInitiativeData({
                 initiative: _initiativesToReset[i],
-                LPTokenVotes: int256(alloc.voteLPToken),
-                LPTokenVetos: int256(alloc.vetoLPToken),
+                STATokenVotes: int256(alloc.voteSTAToken),
+                STATokenVetos: int256(alloc.vetoSTAToken),
                 OffsetVotes: int256(alloc.voteOffset),
                 OffsetVetos: int256(alloc.vetoOffset)
             });
 
             // -0 is still 0, so its fine to flip both
-            deltaLPTokenVotes[i] = -(cachedData[i].LPTokenVotes);
-            deltaLPTokenVetos[i] = -(cachedData[i].LPTokenVetos);
+            deltaSTATokenVotes[i] = -(cachedData[i].STATokenVotes);
+            deltaSTATokenVetos[i] = -(cachedData[i].STATokenVetos);
             deltaOffsetVotes[i] = -(cachedData[i].OffsetVotes);
             deltaOffsetVetos[i] = -(cachedData[i].OffsetVetos);
         }
 
         // RESET HERE || All initiatives will receive most updated data and 0 votes / vetos
-        _allocateLPToken(_initiativesToReset, deltaLPTokenVotes, deltaLPTokenVetos, deltaOffsetVotes, deltaOffsetVetos);
+        _allocateSTAToken(
+            _initiativesToReset, deltaSTATokenVotes, deltaSTATokenVetos, deltaOffsetVotes, deltaOffsetVetos
+        );
 
         return cachedData;
     }
@@ -501,20 +511,20 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         // All other calls to the system enforce this
         // So it's recommended that your last call to `resetAllocations` passes the check
         if (checkAll) {
-            require(userStates[msg.sender].allocatedLPToken == 0, "Governance: must be a reset");
+            require(userStates[msg.sender].allocatedSTAToken == 0, "Governance: must be a reset");
         }
     }
 
     /// @inheritdoc IGovernance
-    function allocateLPToken(
+    function allocateSTAToken(
         address[] calldata _initiativesToReset,
         address[] calldata _initiatives,
-        int256[] calldata _absoluteLPTokenVotes,
-        int256[] calldata _absoluteLPTokenVetos
+        int256[] calldata _absoluteSTATokenVotes,
+        int256[] calldata _absoluteSTATokenVetos
     ) external nonReentrant {
         require(
-            _initiatives.length == _absoluteLPTokenVotes.length
-                && _absoluteLPTokenVotes.length == _absoluteLPTokenVetos.length,
+            _initiatives.length == _absoluteSTATokenVotes.length
+                && _absoluteSTATokenVotes.length == _absoluteSTATokenVetos.length,
             "Governance: array-length-mismatch"
         );
 
@@ -523,19 +533,19 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         _requireNoDuplicates(_initiatives);
 
         // Explicit >= 0 checks for all values since we reset values below
-        _requireNoNegatives(_absoluteLPTokenVotes);
-        _requireNoNegatives(_absoluteLPTokenVetos);
+        _requireNoNegatives(_absoluteSTATokenVotes);
+        _requireNoNegatives(_absoluteSTATokenVetos);
         // If the goal is to remove all votes from an initiative, including in _initiativesToReset is enough
-        _requireNoNOP(_absoluteLPTokenVotes, _absoluteLPTokenVetos);
-        _requireNoSimultaneousVoteAndVeto(_absoluteLPTokenVotes, _absoluteLPTokenVetos);
+        _requireNoNOP(_absoluteSTATokenVotes, _absoluteSTATokenVetos);
+        _requireNoSimultaneousVoteAndVeto(_absoluteSTATokenVotes, _absoluteSTATokenVetos);
 
         // You MUST always reset
         ResetInitiativeData[] memory cachedData = _resetInitiatives(_initiativesToReset);
 
         /// Invariant, 0 allocated = 0 votes
         UserState memory userState = userStates[msg.sender];
-        require(userState.allocatedLPToken == 0, "must be a reset");
-        require(userState.unallocatedLPToken != 0, "Governance: insufficient-or-allocated-lpToken"); // avoid div-by-zero
+        require(userState.allocatedSTAToken == 0, "must be a reset");
+        require(userState.unallocatedSTAToken != 0, "Governance: insufficient-or-allocated-staToken"); // avoid div-by-zero
 
         // After cutoff you can only re-apply the same vote
         // Or vote less
@@ -554,14 +564,14 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
                 for (uint256 y; y < cachedData.length; y++) {
                     if (cachedData[y].initiative == _initiatives[x]) {
                         found = true;
-                        require(_absoluteLPTokenVotes[x] <= cachedData[y].LPTokenVotes, "Cannot increase");
+                        require(_absoluteSTATokenVotes[x] <= cachedData[y].STATokenVotes, "Cannot increase");
                         break;
                     }
                 }
 
                 // Else we assert that the change is a veto, because by definition the initiatives will have received zero votes past this line
                 if (!found) {
-                    require(_absoluteLPTokenVotes[x] == 0, "Must be zero for new initiatives");
+                    require(_absoluteSTATokenVotes[x] == 0, "Must be zero for new initiatives");
                 }
             }
         }
@@ -569,34 +579,34 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         int256[] memory absoluteOffsetVotes = new int256[](_initiatives.length);
         int256[] memory absoluteOffsetVetos = new int256[](_initiatives.length);
 
-        // Calculate the offset portions that correspond to each LPToken vote and veto portion
-        // By recalculating `unallocatedLPToken` & `unallocatedOffset` after each step, we ensure that rounding error
+        // Calculate the offset portions that correspond to each STAToken vote and veto portion
+        // By recalculating `unallocatedSTAToken` & `unallocatedOffset` after each step, we ensure that rounding error
         // doesn't accumulate in `unallocatedOffset`.
         // However, it should be noted that this makes the exact offset allocations dependent on the ordering of the
         // `_initiatives` array.
         for (uint256 x; x < _initiatives.length; x++) {
-            // Either _absoluteLPTokenVotes[x] or _absoluteLPTokenVetos[x] is guaranteed to be zero
-            (int256[] calldata lpTokenAmounts, int256[] memory offsets) = _absoluteLPTokenVotes[x] > 0
-                ? (_absoluteLPTokenVotes, absoluteOffsetVotes)
-                : (_absoluteLPTokenVetos, absoluteOffsetVetos);
+            // Either _absoluteSTATokenVotes[x] or _absoluteSTATokenVetos[x] is guaranteed to be zero
+            (int256[] calldata staTokenAmounts, int256[] memory offsets) = _absoluteSTATokenVotes[x] > 0
+                ? (_absoluteSTATokenVotes, absoluteOffsetVotes)
+                : (_absoluteSTATokenVetos, absoluteOffsetVetos);
 
-            uint256 lpTokenAmount = uint256(lpTokenAmounts[x]);
-            uint256 offset = userState.unallocatedOffset * lpTokenAmount / userState.unallocatedLPToken;
+            uint256 staTokenAmount = uint256(staTokenAmounts[x]);
+            uint256 offset = userState.unallocatedOffset * staTokenAmount / userState.unallocatedSTAToken;
 
-            userState.unallocatedLPToken -= lpTokenAmount;
+            userState.unallocatedSTAToken -= staTokenAmount;
             userState.unallocatedOffset -= offset;
 
             offsets[x] = int256(offset);
         }
 
         // Vote here, all values are now absolute changes
-        _allocateLPToken(
-            _initiatives, _absoluteLPTokenVotes, _absoluteLPTokenVetos, absoluteOffsetVotes, absoluteOffsetVetos
+        _allocateSTAToken(
+            _initiatives, _absoluteSTATokenVotes, _absoluteSTATokenVetos, absoluteOffsetVotes, absoluteOffsetVetos
         );
     }
 
     // Avoid "stack too deep" by placing these variables in memory
-    struct AllocateLPTokenMemory {
+    struct AllocateSTATokenMemory {
         VoteSnapshot votesSnapshot_;
         GlobalState state;
         UserState userState;
@@ -605,8 +615,8 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         InitiativeState prevInitiativeState;
         Allocation allocation;
         uint256 currentEpoch;
-        int256 deltaLPTokenVotes;
-        int256 deltaLPTokenVetos;
+        int256 deltaSTATokenVotes;
+        int256 deltaSTATokenVetos;
         int256 deltaOffsetVotes;
         int256 deltaOffsetVetos;
     }
@@ -615,23 +625,23 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
     /// @dev Assumes that all the input arrays are of equal length
     /// @dev NOTE: Given the current usage the function either: Resets the value to 0, or sets the value to a new value
     ///      Review the flows as the function could be used in many ways, but it ends up being used in just those 2 ways
-    function _allocateLPToken(
+    function _allocateSTAToken(
         address[] memory _initiatives,
-        int256[] memory _deltaLPTokenVotes,
-        int256[] memory _deltaLPTokenVetos,
+        int256[] memory _deltaSTATokenVotes,
+        int256[] memory _deltaSTATokenVetos,
         int256[] memory _deltaOffsetVotes,
         int256[] memory _deltaOffsetVetos
     ) internal {
-        AllocateLPTokenMemory memory vars;
+        AllocateSTATokenMemory memory vars;
         (vars.votesSnapshot_, vars.state) = _snapshotVotes();
         vars.currentEpoch = epoch();
         vars.userState = userStates[msg.sender];
 
         for (uint256 i = 0; i < _initiatives.length; i++) {
             address initiative = _initiatives[i];
-            vars.deltaLPTokenVotes = _deltaLPTokenVotes[i];
-            vars.deltaLPTokenVetos = _deltaLPTokenVetos[i];
-            assert(vars.deltaLPTokenVotes != 0 || vars.deltaLPTokenVetos != 0);
+            vars.deltaSTATokenVotes = _deltaSTATokenVotes[i];
+            vars.deltaSTATokenVetos = _deltaSTATokenVetos[i];
+            assert(vars.deltaSTATokenVotes != 0 || vars.deltaSTATokenVetos != 0);
 
             vars.deltaOffsetVotes = _deltaOffsetVotes[i];
             vars.deltaOffsetVetos = _deltaOffsetVetos[i];
@@ -646,7 +656,7 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
                 initiative, vars.votesSnapshot_, vars.votesForInitiativeSnapshot_, vars.initiativeState
             );
 
-            if (vars.deltaLPTokenVotes > 0 || vars.deltaLPTokenVetos > 0) {
+            if (vars.deltaSTATokenVotes > 0 || vars.deltaSTATokenVetos > 0) {
                 /// You cannot vote on `unregisterable` but a vote may have been there
                 require(
                     status == InitiativeStatus.SKIP || status == InitiativeStatus.CLAIMABLE
@@ -656,7 +666,7 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
             }
 
             if (status == InitiativeStatus.DISABLED) {
-                require(vars.deltaLPTokenVotes <= 0 && vars.deltaLPTokenVetos <= 0, "Must be a withdrawal");
+                require(vars.deltaSTATokenVotes <= 0 && vars.deltaSTATokenVetos <= 0, "Must be a withdrawal");
             }
 
             /// === UPDATE ACCOUNTING === ///
@@ -664,16 +674,16 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
 
             // deep copy of the initiative's state before the allocation
             vars.prevInitiativeState = InitiativeState(
-                vars.initiativeState.voteLPToken,
+                vars.initiativeState.voteSTAToken,
                 vars.initiativeState.voteOffset,
-                vars.initiativeState.vetoLPToken,
+                vars.initiativeState.vetoSTAToken,
                 vars.initiativeState.vetoOffset,
                 vars.initiativeState.lastEpochClaim
             );
 
-            // allocate the voting and vetoing LPToken to the initiative
-            vars.initiativeState.voteLPToken = add(vars.initiativeState.voteLPToken, vars.deltaLPTokenVotes);
-            vars.initiativeState.vetoLPToken = add(vars.initiativeState.vetoLPToken, vars.deltaLPTokenVetos);
+            // allocate the voting and vetoing STAToken to the initiative
+            vars.initiativeState.voteSTAToken = add(vars.initiativeState.voteSTAToken, vars.deltaSTATokenVotes);
+            vars.initiativeState.vetoSTAToken = add(vars.initiativeState.vetoSTAToken, vars.deltaSTATokenVetos);
 
             // Update the initiative's vote and veto offsets
             vars.initiativeState.voteOffset = add(vars.initiativeState.voteOffset, vars.deltaOffsetVotes);
@@ -687,49 +697,49 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
             /// We update the state only for non-disabled initiatives
             /// Disabled initiatves have had their totals subtracted already
             if (status != InitiativeStatus.DISABLED) {
-                assert(vars.state.countedVoteLPToken >= vars.prevInitiativeState.voteLPToken);
+                assert(vars.state.countedVoteSTAToken >= vars.prevInitiativeState.voteSTAToken);
 
-                // Remove old initative LPToken and offset from global count
-                vars.state.countedVoteLPToken -= vars.prevInitiativeState.voteLPToken;
+                // Remove old initative STAToken and offset from global count
+                vars.state.countedVoteSTAToken -= vars.prevInitiativeState.voteSTAToken;
                 vars.state.countedVoteOffset -= vars.prevInitiativeState.voteOffset;
 
-                // Add new initative LPToken and offset to global count
-                vars.state.countedVoteLPToken += vars.initiativeState.voteLPToken;
+                // Add new initative STAToken and offset to global count
+                vars.state.countedVoteSTAToken += vars.initiativeState.voteSTAToken;
                 vars.state.countedVoteOffset += vars.initiativeState.voteOffset;
             }
 
             // == USER ALLOCATION TO INITIATIVE == //
 
-            // Record the vote and veto LPToken and offsets by user to initative
-            vars.allocation = lpTokenAllocatedByUserToInitiative[msg.sender][initiative];
+            // Record the vote and veto STAToken and offsets by user to initative
+            vars.allocation = staTokenAllocatedByUserToInitiative[msg.sender][initiative];
             // Update offsets
             vars.allocation.voteOffset = add(vars.allocation.voteOffset, vars.deltaOffsetVotes);
             vars.allocation.vetoOffset = add(vars.allocation.vetoOffset, vars.deltaOffsetVetos);
 
             // Update votes and vetos
-            vars.allocation.voteLPToken = add(vars.allocation.voteLPToken, vars.deltaLPTokenVotes);
-            vars.allocation.vetoLPToken = add(vars.allocation.vetoLPToken, vars.deltaLPTokenVetos);
+            vars.allocation.voteSTAToken = add(vars.allocation.voteSTAToken, vars.deltaSTATokenVotes);
+            vars.allocation.vetoSTAToken = add(vars.allocation.vetoSTAToken, vars.deltaSTATokenVetos);
 
             vars.allocation.atEpoch = vars.currentEpoch;
 
             // Voting power allocated to initiatives should never be negative, else it might break reward allocation
             // schemes such as `BribeInitiative` which distribute rewards in proportion to voting power allocated.
-            assert(vars.allocation.voteLPToken * block.timestamp >= vars.allocation.voteOffset);
-            assert(vars.allocation.vetoLPToken * block.timestamp >= vars.allocation.vetoOffset);
+            assert(vars.allocation.voteSTAToken * block.timestamp >= vars.allocation.voteOffset);
+            assert(vars.allocation.vetoSTAToken * block.timestamp >= vars.allocation.vetoOffset);
 
-            lpTokenAllocatedByUserToInitiative[msg.sender][initiative] = vars.allocation;
+            staTokenAllocatedByUserToInitiative[msg.sender][initiative] = vars.allocation;
 
             // == USER STATE == //
 
-            // Remove from the user's unallocated LPToken and offset
-            vars.userState.unallocatedLPToken =
-                sub(vars.userState.unallocatedLPToken, (vars.deltaLPTokenVotes + vars.deltaLPTokenVetos));
+            // Remove from the user's unallocated STAToken and offset
+            vars.userState.unallocatedSTAToken =
+                sub(vars.userState.unallocatedSTAToken, (vars.deltaSTATokenVotes + vars.deltaSTATokenVetos));
             vars.userState.unallocatedOffset =
                 sub(vars.userState.unallocatedOffset, (vars.deltaOffsetVotes + vars.deltaOffsetVetos));
 
-            // Add to the user's allocated LPToken and offset
-            vars.userState.allocatedLPToken =
-                add(vars.userState.allocatedLPToken, (vars.deltaLPTokenVotes + vars.deltaLPTokenVetos));
+            // Add to the user's allocated STAToken and offset
+            vars.userState.allocatedSTAToken =
+                add(vars.userState.allocatedSTAToken, (vars.deltaSTATokenVotes + vars.deltaSTATokenVetos));
             vars.userState.allocatedOffset =
                 add(vars.userState.allocatedOffset, (vars.deltaOffsetVotes + vars.deltaOffsetVetos));
 
@@ -737,10 +747,10 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
 
             // See https://github.com/liquity/V2-gov/issues/125
             // A malicious initiative could try to dissuade voters from casting vetos by consuming as much gas as
-            // possible in the `onAfterAllocateLPToken` hook when detecting vetos.
+            // possible in the `onAfterAllocateSTAToken` hook when detecting vetos.
             // We deem that the risks of calling into malicous initiatives upon veto allocation far outweigh the
             // benefits of notifying benevolent initiatives of vetos.
-            if (vars.allocation.vetoLPToken == 0) {
+            if (vars.allocation.vetoSTAToken == 0) {
                 // Replaces try / catch | Enforces sufficient gas is passed
                 hookStatus = safeCallWithMinGas(
                     initiative,
@@ -755,14 +765,14 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
                 hookStatus = HookStatus.NotCalled;
             }
 
-            emit AllocateLPToken(
-                msg.sender, initiative, vars.deltaLPTokenVotes, vars.deltaLPTokenVetos, vars.currentEpoch, hookStatus
+            emit AllocateSTAToken(
+                msg.sender, initiative, vars.deltaSTATokenVotes, vars.deltaSTATokenVetos, vars.currentEpoch, hookStatus
             );
         }
 
         require(
-            vars.userState.allocatedLPToken <= vars.userState.totalLpToken,
-            "Governance: insufficient-or-allocated-lpToken"
+            vars.userState.allocatedSTAToken <= vars.userState.totalLpToken,
+            "Governance: insufficient-or-allocated-staToken"
         );
 
         globalState = vars.state;
@@ -786,10 +796,10 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         // NOTE: Safe to remove | See `check_claim_soundness`
         assert(initiativeState.lastEpochClaim < currentEpoch - 1);
 
-        assert(state.countedVoteLPToken >= initiativeState.voteLPToken);
+        assert(state.countedVoteSTAToken >= initiativeState.voteSTAToken);
         assert(state.countedVoteOffset >= initiativeState.voteOffset);
 
-        state.countedVoteLPToken -= initiativeState.voteLPToken;
+        state.countedVoteSTAToken -= initiativeState.voteSTAToken;
         state.countedVoteOffset -= initiativeState.voteOffset;
 
         globalState = state;
@@ -853,21 +863,21 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         return claimableAmount;
     }
 
-    function _requireNoNOP(int256[] memory _absoluteLPTokenVotes, int256[] memory _absoluteLPTokenVetos)
+    function _requireNoNOP(int256[] memory _absoluteSTATokenVotes, int256[] memory _absoluteSTATokenVetos)
         internal
         pure
     {
-        for (uint256 i; i < _absoluteLPTokenVotes.length; i++) {
-            require(_absoluteLPTokenVotes[i] > 0 || _absoluteLPTokenVetos[i] > 0, "Governance: voting nothing");
+        for (uint256 i; i < _absoluteSTATokenVotes.length; i++) {
+            require(_absoluteSTATokenVotes[i] > 0 || _absoluteSTATokenVetos[i] > 0, "Governance: voting nothing");
         }
     }
 
     function _requireNoSimultaneousVoteAndVeto(
-        int256[] memory _absoluteLPTokenVotes,
-        int256[] memory _absoluteLPTokenVetos
+        int256[] memory _absoluteSTATokenVotes,
+        int256[] memory _absoluteSTATokenVetos
     ) internal pure {
-        for (uint256 i; i < _absoluteLPTokenVotes.length; i++) {
-            require(_absoluteLPTokenVotes[i] == 0 || _absoluteLPTokenVetos[i] == 0, "Governance: vote-and-veto");
+        for (uint256 i; i < _absoluteSTATokenVotes.length; i++) {
+            require(_absoluteSTATokenVotes[i] == 0 || _absoluteSTATokenVetos[i] == 0, "Governance: vote-and-veto");
         }
     }
 }

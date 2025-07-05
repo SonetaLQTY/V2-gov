@@ -5,6 +5,11 @@ import {IERC20} from "openzeppelin/contracts/interfaces/IERC20.sol";
 
 uint256 constant UNREGISTERED_INITIATIVE = type(uint256).max;
 
+interface ISingleStaking {
+    function depositAsAuthority(address _user, uint256 _amount) external;
+    function withdrawAsAuthority(address _user, uint256 _amount) external;
+}
+
 interface IGovernance {
     enum HookStatus {
         Failed,
@@ -12,15 +17,15 @@ interface IGovernance {
         NotCalled
     }
 
-    /// @notice Emitted when a user deposits LPToken
-    /// @param user The account depositing LPToken
-    /// @param lpTokenAmount The amount of LP tokens being deposited
-    event DepositLPToken(address indexed user, uint256 lpTokenAmount);
+    /// @notice Emitted when a user deposits STAToken
+    /// @param user The account depositing STAToken
+    /// @param staTokenAmount The amount of LP tokens being deposited
+    event DepositSTAToken(address indexed user, uint256 staTokenAmount);
 
-    /// @notice Emitted when a user withdraws LPToken or claims V1 staking rewards
-    /// @param user The account withdrawing LPToken or claiming V1 staking rewards
-    /// @param lpTokenAmount The amount of LP tokens being withdrawn
-    event WithdrawLPToken(address indexed user, uint256 lpTokenAmount);
+    /// @notice Emitted when a user withdraws STAToken or claims V1 staking rewards
+    /// @param user The account withdrawing STAToken or claiming V1 staking rewards
+    /// @param staTokenAmount The amount of LP tokens being withdrawn
+    event WithdrawSTAToken(address indexed user, uint256 staTokenAmount);
 
     event SnapshotVotes(uint256 votes, uint256 forEpoch, uint256 oneAccrued);
     event SnapshotVotesForInitiative(address indexed initiative, uint256 votes, uint256 vetos, uint256 forEpoch);
@@ -28,11 +33,11 @@ interface IGovernance {
     event RegisterInitiative(address initiative, address registrant, uint256 atEpoch, HookStatus hookStatus);
     event UnregisterInitiative(address initiative, uint256 atEpoch, HookStatus hookStatus);
 
-    event AllocateLPToken(
+    event AllocateSTAToken(
         address indexed user,
         address indexed initiative,
-        int256 deltaVoteLPToken,
-        int256 deltaVetoLPToken,
+        int256 deltaVoteSTAToken,
+        int256 deltaVetoSTAToken,
         uint256 atEpoch,
         HookStatus hookStatus
     );
@@ -53,9 +58,13 @@ interface IGovernance {
 
     function registerInitialInitiatives(address[] memory _initiatives) external;
 
-    /// @notice Address of the LPToken token
-    /// @return lpToken Address of the LPToken token
-    function lpToken() external view returns (IERC20 lpToken);
+    /// @notice Address of the staking contract
+    /// @return stakingContract Address of the staking contract
+    function STAKING_CONTRACT() external view returns (ISingleStaking stakingContract);
+
+    /// @notice Address of the STAToken token
+    /// @return staToken Address of the STAToken token
+    function staToken() external view returns (IERC20 staToken);
     /// @notice Address of the ONE token
     /// @return one Address of the ONE token
     function one() external view returns (IERC20 one);
@@ -123,82 +132,82 @@ interface IGovernance {
         returns (uint256 votes, uint256 forEpoch, uint256 lastCountedEpoch, uint256 vetos);
 
     struct Allocation {
-        uint256 voteLPToken; // LPToken allocated vouching for the initiative
-        uint256 voteOffset; // Offset associated with LPToken vouching for the initiative
-        uint256 vetoLPToken; // LPToken vetoing the initiative
-        uint256 vetoOffset; // Offset associated with LPToken vetoing the initiative
+        uint256 voteSTAToken; // STAToken allocated vouching for the initiative
+        uint256 voteOffset; // Offset associated with STAToken vouching for the initiative
+        uint256 vetoSTAToken; // STAToken vetoing the initiative
+        uint256 vetoOffset; // Offset associated with STAToken vetoing the initiative
         uint256 atEpoch; // Epoch at which the allocation was last updated
     }
 
     struct UserState {
-        uint256 unallocatedLPToken; // LPToken deposited and unallocated
-        uint256 unallocatedOffset; // The offset sum corresponding to the unallocated LPToken
-        uint256 allocatedLPToken; // LPToken allocated by the user to initatives
-        uint256 allocatedOffset; // The offset sum corresponding to the allocated LPToken
+        uint256 unallocatedSTAToken; // STAToken deposited and unallocated
+        uint256 unallocatedOffset; // The offset sum corresponding to the unallocated STAToken
+        uint256 allocatedSTAToken; // STAToken allocated by the user to initatives
+        uint256 allocatedOffset; // The offset sum corresponding to the allocated STAToken
         uint256 totalLpToken;
     }
 
     struct InitiativeState {
-        uint256 voteLPToken; // LPToken allocated vouching for the initiative
-        uint256 voteOffset; // Offset associated with LPToken vouching for to the initative
-        uint256 vetoLPToken; // LPToken allocated vetoing the initiative
-        uint256 vetoOffset; // Offset associated with LPToken veoting the initative
+        uint256 voteSTAToken; // STAToken allocated vouching for the initiative
+        uint256 voteOffset; // Offset associated with STAToken vouching for to the initative
+        uint256 vetoSTAToken; // STAToken allocated vetoing the initiative
+        uint256 vetoOffset; // Offset associated with STAToken veoting the initative
         uint256 lastEpochClaim;
     }
 
     struct GlobalState {
-        uint256 countedVoteLPToken; // Total LPToken that is included in vote counting
-        uint256 countedVoteOffset; // Offset associated with the counted vote LPToken
+        uint256 countedVoteSTAToken; // Total STAToken that is included in vote counting
+        uint256 countedVoteOffset; // Offset associated with the counted vote STAToken
     }
 
     /// @notice Returns the user's state
-    /// @return unallocatedLPToken LPToken deposited and unallocated
-    /// @return unallocatedOffset Offset associated with unallocated LPToken
-    /// @return allocatedLPToken allocated by the user to initatives
-    /// @return allocatedOffset Offset associated with allocated LPToken
+    /// @return unallocatedSTAToken STAToken deposited and unallocated
+    /// @return unallocatedOffset Offset associated with unallocated STAToken
+    /// @return allocatedSTAToken allocated by the user to initatives
+    /// @return allocatedOffset Offset associated with allocated STAToken
     function userStates(address _user)
         external
         view
         returns (
-            uint256 unallocatedLPToken,
+            uint256 unallocatedSTAToken,
             uint256 unallocatedOffset,
-            uint256 allocatedLPToken,
+            uint256 allocatedSTAToken,
             uint256 allocatedOffset,
             uint256 totalLpToken
         );
     /// @notice Returns the initiative's state
     /// @param _initiative Address of the initiative
-    /// @return voteLPToken LPToken allocated vouching for the initiative
-    /// @return voteOffset Offset associated with voteLPToken
-    /// @return vetoLPToken LPToken allocated vetoing the initiative
-    /// @return vetoOffset Offset associated with vetoLPToken
+    /// @return voteSTAToken STAToken allocated vouching for the initiative
+    /// @return voteOffset Offset associated with voteSTAToken
+    /// @return vetoSTAToken STAToken allocated vetoing the initiative
+    /// @return vetoOffset Offset associated with vetoSTAToken
     /// @return lastEpochClaim // Last epoch at which rewards were claimed
     function initiativeStates(address _initiative)
         external
         view
         returns (
-            uint256 voteLPToken,
+            uint256 voteSTAToken,
             uint256 voteOffset,
-            uint256 vetoLPToken,
+            uint256 vetoSTAToken,
             uint256 vetoOffset,
             uint256 lastEpochClaim
         );
     /// @notice Returns the global state
-    /// @return countedVoteLPToken Total LPToken that is included in vote counting
-    /// @return countedVoteOffset Offset associated with countedVoteLPToken
-    function globalState() external view returns (uint256 countedVoteLPToken, uint256 countedVoteOffset);
-    /// @notice Returns the amount of voting and vetoing LPToken a user allocated to an initiative
+    /// @return countedVoteSTAToken Total STAToken that is included in vote counting
+    /// @return countedVoteOffset Offset associated with countedVoteSTAToken
+    function globalState() external view returns (uint256 countedVoteSTAToken, uint256 countedVoteOffset);
+    /// @notice Returns the amount of voting and vetoing STAToken a user allocated to an initiative
     /// @param _user Address of the user
     /// @param _initiative Address of the initiative
-    /// @return voteLPToken LPToken allocated vouching for the initiative
-    /// @return voteOffset The offset associated with voteLPToken
-    /// @return vetoLPToken allocated vetoing the initiative
-    /// @return vetoOffset the offset associated with vetoLPToken
+    /// @return voteSTAToken STAToken allocated vouching for the initiative
+    /// @return voteOffset The offset associated with voteSTAToken
+    /// @return vetoSTAToken allocated vetoing the initiative
+    /// @return vetoOffset the offset associated with vetoSTAToken
     /// @return atEpoch Epoch at which the allocation was last updated
-    function lpTokenAllocatedByUserToInitiative(address _user, address _initiative)
+    function staTokenAllocatedByUserToInitiative(address _user, address _initiative)
         external
         view
-        returns (uint256 voteLPToken, uint256 voteOffset, uint256 vetoLPToken, uint256 vetoOffset, uint256 atEpoch);
+        returns (uint256 voteSTAToken, uint256 voteOffset, uint256 vetoSTAToken, uint256 vetoOffset, uint256 atEpoch);
 
     /// @notice Returns when an initiative was registered
     /// @param _initiative Address of the initiative
@@ -211,12 +220,12 @@ interface IGovernance {
                                 STAKING
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Deposits LPToken
-    /// @param _amount Amount of LPToken to deposit
+    /// @notice Deposits STAToken
+    /// @param _amount Amount of STAToken to deposit
     function deposit(uint256 _amount) external;
 
-    /// @notice Withdraws LPToken
-    /// @param _amount Amount of LPToken to withdraw
+    /// @notice Withdraws STAToken
+    /// @param _amount Amount of STAToken to withdraw
     function withdraw(uint256 _amount) external;
 
     /*//////////////////////////////////////////////////////////////
@@ -234,11 +243,11 @@ interface IGovernance {
     function secondsWithinEpoch() external view returns (uint256 secondsWithinEpoch);
 
     /// @notice Returns the voting power for an entity (i.e. user or initiative) at a given timestamp
-    /// @param _lpTokenAmount Amount of LPToken associated with the entity
+    /// @param _staTokenAmount Amount of STAToken associated with the entity
     /// @param _timestamp Timestamp at which to calculate voting power
     /// @param _offset The entity's offset sum
     /// @return votes Number of votes
-    function lpTokenToVotes(uint256 _lpTokenAmount, uint256 _timestamp, uint256 _offset)
+    function staTokenToVotes(uint256 _staTokenAmount, uint256 _timestamp, uint256 _offset)
         external
         pure
         returns (uint256);
@@ -271,7 +280,7 @@ interface IGovernance {
         );
 
     /// @notice Voting threshold is the max. of either:
-    ///   - 4% of the total voting LPToken in the previous epoch
+    ///   - 4% of the total voting STAToken in the previous epoch
     ///   - or the minimum number of votes necessary to claim at least MIN_CLAIM ONE
     /// This value can be offsynch, use the non view `calculateVotingThreshold` to always retrieve the most up to date value
     /// @return votingThreshold Voting threshold
@@ -325,22 +334,22 @@ interface IGovernance {
     // /// @param _initiative Address of the initiative
     function unregisterInitiative(address _initiative) external;
 
-    /// @notice Allocates the user's LPToken to initiatives
+    /// @notice Allocates the user's STAToken to initiatives
     /// @dev The user can only allocate to active initiatives (older than 1 epoch) and has to have enough unallocated
-    /// LPToken available, the initiatives listed must be unique, and towards the end of the epoch a user can only maintain or reduce their votes
+    /// STAToken available, the initiatives listed must be unique, and towards the end of the epoch a user can only maintain or reduce their votes
     /// @param _initiativesToReset Addresses of the initiatives the caller was previously allocated to, must be reset to prevent desynch of voting power
     /// @param _initiatives Addresses of the initiatives to allocate to, can match or be different from `_resetInitiatives`
-    /// @param _absoluteLPTokenVotes LPToken to allocate to the initiatives as votes
-    /// @param _absoluteLPTokenVetos LPToken to allocate to the initiatives as vetos
-    function allocateLPToken(
+    /// @param _absoluteSTATokenVotes STAToken to allocate to the initiatives as votes
+    /// @param _absoluteSTATokenVetos STAToken to allocate to the initiatives as vetos
+    function allocateSTAToken(
         address[] calldata _initiativesToReset,
         address[] memory _initiatives,
-        int256[] memory _absoluteLPTokenVotes,
-        int256[] memory _absoluteLPTokenVetos
+        int256[] memory _absoluteSTATokenVotes,
+        int256[] memory _absoluteSTATokenVetos
     ) external;
-    /// @notice Deallocates the user's LPToken from initiatives
-    /// @param _initiativesToReset Addresses of initiatives to deallocate LPToken from
-    /// @param _checkAll When true, the call will revert if there is still some allocated LPToken left after deallocating
+    /// @notice Deallocates the user's STAToken from initiatives
+    /// @param _initiativesToReset Addresses of initiatives to deallocate STAToken from
+    /// @param _checkAll When true, the call will revert if there is still some allocated STAToken left after deallocating
     ///                  from all the addresses in `_initiativesToReset`
     function resetAllocations(address[] calldata _initiativesToReset, bool _checkAll) external;
 
