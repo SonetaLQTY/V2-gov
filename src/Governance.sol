@@ -169,7 +169,7 @@ contract Governance is MultiDelegateCall, ReentrancyGuard, Ownable, IGovernance 
         userState.unallocatedSTAToken -= _staTokenAmount;
         userState.totalLpToken -= _staTokenAmount;
 
-        STAKING_CONTRACT.withdrawAsAuthority(msg.sender, _staTokenAmount);
+        STAKING_CONTRACT.withdrawAsAuthority(msg.sender, msg.sender, _staTokenAmount);
 
         emit WithdrawSTAToken(msg.sender, _staTokenAmount);
     }

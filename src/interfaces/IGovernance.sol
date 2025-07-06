@@ -7,7 +7,8 @@ uint256 constant UNREGISTERED_INITIATIVE = type(uint256).max;
 
 interface ISingleStaking {
     function depositAsAuthority(address _user, uint256 _amount) external;
-    function withdrawAsAuthority(address _user, uint256 _amount) external;
+
+    function withdrawAsAuthority(address _user, address _receiver, uint256 _amount) external;
 }
 
 interface IGovernance {
